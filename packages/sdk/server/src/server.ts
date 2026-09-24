@@ -282,7 +282,7 @@ export class HarnessSdkJsonRpcServer {
     try {
       await closing
     } finally {
-      if (this.sessionClosures.get(sessionId) === closing) this.sessionClosures.delete(sessionId)
+      this.sessionClosures.delete(sessionId)
     }
     return {}
   }

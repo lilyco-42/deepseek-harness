@@ -109,6 +109,79 @@ describe('JsonRpcLineTransport', () => {
     b.close()
   })
 
+  it('ignores cancellation notifications with a malformed request id', async () => {
+    const { a, aToB, bToA } = transportPair()
+    const handled = Promise.withResolvers<AbortSignal>()
+    const finish = Promise.withResolvers<{ ok: true }>()
+    a.onRequest(async (_method, _params, signal) => {
+      handled.resolve(signal)
+      return finish.promise
+    })
+    a.start()
+
+    const response = once(aToB, 'data')
+    bToA.write('{"jsonrpc":"2.0","id":"slow-1","method":"slow","params":{}}\n')
+    const requestSignal = await handled.promise
+    bToA.write('{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":{"invalid":true}}}\n')
+    finish.resolve({ ok: true })
+
+    const [chunk] = await response
+    expect(requestSignal.aborted).toBe(false)
+    expect(JSON.parse(String(chunk))).toEqual({ jsonrpc: '2.0', id: 'slow-1', result: { ok: true } })
+    a.close()
+  })
+
+  it('returns cancelled when a request handler succeeds after peer cancellation', async () => {
+    const { a, aToB, bToA } = transportPair()
+    const handled = Promise.withResolvers<AbortSignal>()
+    const finish = Promise.withResolvers<{ ok: true }>()
+    a.onRequest(async (_method, _params, signal) => {
+      handled.resolve(signal)
+      return finish.promise
+    })
+    a.start()
+
+    const response = once(aToB, 'data')
+    bToA.write('{"jsonrpc":"2.0","id":2,"method":"slow","params":{}}\n')
+    const requestSignal = await handled.promise
+    bToA.write('{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":2}}\n')
+    finish.resolve({ ok: true })
+
+    const [chunk] = await response
+    expect(requestSignal.aborted).toBe(true)
+    expect(JSON.parse(String(chunk))).toEqual({
+      jsonrpc: '2.0',
+      id: 2,
+      error: { code: -32800, message: 'request cancelled' },
+    })
+    a.close()
+  })
+
+  it('aborts in-flight handlers when the transport closes', async () => {
+    const { a, aToB, bToA } = transportPair()
+    const handled = Promise.withResolvers<AbortSignal>()
+    const finish = Promise.withResolvers<{ ok: true }>()
+    a.onRequest(async (_method, _params, signal) => {
+      handled.resolve(signal)
+      return finish.promise
+    })
+    a.start()
+
+    const response = once(aToB, 'data')
+    bToA.write('{"jsonrpc":"2.0","id":"slow-3","method":"slow","params":{}}\n')
+    const requestSignal = await handled.promise
+    a.close()
+    finish.resolve({ ok: true })
+
+    const [chunk] = await response
+    expect(requestSignal.aborted).toBe(true)
+    expect(JSON.parse(String(chunk))).toEqual({
+      jsonrpc: '2.0',
+      id: 'slow-3',
+      error: { code: -32800, message: 'request cancelled' },
+    })
+  })
+
   it('preserves structured error data from an error response frame', async () => {
     const { aToB, bToA, b } = transportPair()
     b.start()

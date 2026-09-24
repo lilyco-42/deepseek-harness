@@ -482,6 +482,57 @@ describe('HarnessClient', () => {
     await client.close()
   })
 
+  it('fails unsupported and malformed runtime approval requests closed', async () => {
+    const dir = await tempDir('sdk-client-bad-runtime-request-')
+    const resultFile = join(dir, 'runtime-result.jsonl')
+    const client = processClient(fakeLaunch({
+      FAKE_APPROVAL_RESULT_FILE: resultFile,
+      FAKE_RUNTIME_METHOD: 'runtime/unsupported',
+    }))
+    cleanups.push(() => client.close())
+
+    await client.initialize({ cwd: dir, provider: 'fake', model: 'fake' })
+    await vi.waitFor(async () => {
+      expect(await readFile(resultFile, 'utf8')).toContain('unsupported runtime request: runtime/unsupported')
+    })
+    await client.close()
+
+    const malformedResultFile = join(dir, 'malformed-runtime-result.jsonl')
+    const malformed = processClient(fakeLaunch({
+      FAKE_APPROVAL_RESULT_FILE: malformedResultFile,
+      FAKE_RUNTIME_PARAMS: JSON.stringify({ sessionId: 7, toolName: 'bash' }),
+    }))
+    cleanups.push(() => malformed.close())
+    await malformed.initialize({ cwd: dir, provider: 'fake', model: 'fake' })
+    await vi.waitFor(async () => {
+      expect(await readFile(malformedResultFile, 'utf8')).toContain('approval/request carried malformed parameters')
+    })
+    await malformed.close()
+  })
+
+  it('omits optional approval fields and converts invalid host outcomes to unavailable', async () => {
+    const dir = await tempDir('sdk-client-approval-defaults-')
+    const resultFile = join(dir, 'approval-result.jsonl')
+    const seen: unknown[] = []
+    const client = processClient(fakeLaunch({
+      FAKE_APPROVAL_RESULT_FILE: resultFile,
+      FAKE_RUNTIME_PARAMS: JSON.stringify({ sessionId: 'fake-session', toolName: 'read' }),
+    }), {
+      onApprovalRequest: request => {
+        seen.push(request)
+        return 'not-a-valid-outcome' as never
+      },
+    })
+    cleanups.push(() => client.close())
+
+    await client.initialize({ cwd: dir, provider: 'fake', model: 'fake' })
+    await vi.waitFor(async () => {
+      expect(await readFile(resultFile, 'utf8')).toContain('"outcome":"unavailable"')
+    })
+    expect(seen).toEqual([{ sessionId: 'fake-session', toolName: 'read' }])
+    await client.close()
+  })
+
   it('bounds profile initialization and names the selected profile in its diagnostic', async () => {
     const client = processClient(fakeLaunch(
       { FAKE_HANG_INIT: '1' },

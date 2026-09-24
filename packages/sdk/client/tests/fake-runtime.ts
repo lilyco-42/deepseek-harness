@@ -48,6 +48,7 @@
  * - `FAKE_STDERR`: write this line to stderr at boot (diagnostics-tail probe).
  * - `FAKE_STDERR_NO_NEWLINE`: write this to stderr WITHOUT a newline (buffer-flush probe).
  * - `FAKE_RECORD_INIT`: append each `initialize` params JSON to this file (handshake probe).
+ * - `FAKE_RUNTIME_METHOD` + optional `FAKE_RUNTIME_PARAMS`: send a scripted runtime request after initialize.
  */
 
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
@@ -268,16 +269,22 @@ reader.on('line', (line) => {
       }
       respond({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } })
       if (env.FAKE_APPROVAL_RESULT_FILE !== undefined) {
+        const params: unknown = env.FAKE_RUNTIME_PARAMS === undefined
+          ? {
+              sessionId: 'fake-session',
+              toolName: 'bash',
+              callId: 'tool-1',
+              reason: 'test approval',
+            }
+          : JSON.parse(env.FAKE_RUNTIME_PARAMS)
+        if (params === null || typeof params !== 'object' || Array.isArray(params)) {
+          throw new Error('FAKE_RUNTIME_PARAMS must be a JSON object')
+        }
         write({
           jsonrpc: '2.0',
           id: 'runtime-approval-1',
-          method: 'approval/request',
-          params: {
-            sessionId: 'fake-session',
-            toolName: 'bash',
-            callId: 'tool-1',
-            reason: 'test approval',
-          },
+          method: env.FAKE_RUNTIME_METHOD ?? 'approval/request',
+          params,
         })
       }
       return

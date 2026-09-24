@@ -160,10 +160,24 @@ describe('HarnessSdkJsonRpcServer', () => {
 
       transport.requestHandler = async () => ({ outcome: 'allow-everything' })
       expect(await ctx.waterfall('approval/request', request, next)).toBe('unavailable')
+      transport.requestHandler = async () => []
+      expect(await ctx.waterfall('approval/request', request, next)).toBe('unavailable')
+
+      const minimalRequest: ApprovalRequestEvent = { agent, toolName: 'read' }
+      transport.requestHandler = async () => { throw new Error('host disconnected') }
+      expect(await ctx.waterfall('approval/request', minimalRequest, next)).toBe('unavailable')
+      expect(transport.requests.at(-1)).toEqual({
+        method: 'approval/request',
+        params: { sessionId: 'owned', toolName: 'read' },
+      })
+
+      const aborted = new AbortController()
+      aborted.abort(new Error('turn cancelled'))
+      expect(await ctx.waterfall('approval/request', { ...minimalRequest, signal: aborted.signal }, next)).toBe('cancelled')
       foreignHandle = await ctx.agents.create({ sessionId: SessionId('foreign'), meta: { cwd: storageDir } })
       expect(await ctx.waterfall('approval/request', { ...request, agent: foreignHandle.agent }, next)).toBe('unavailable')
       expect(next).toHaveBeenCalledOnce()
-      expect(transport.requests).toHaveLength(2)
+      expect(transport.requests).toHaveLength(5)
     } finally {
       await foreignHandle?.dispose()
       await server?.shutdown()
@@ -201,6 +215,8 @@ describe('HarnessSdkJsonRpcServer', () => {
       expect(resumedRequest.messages.filter(message => message.role === 'user')).toHaveLength(2)
       expect(JSON.stringify(resumedRequest.messages)).toContain('start')
       expect(JSON.stringify(resumedRequest.messages)).toContain('continue')
+      await server.shutdown()
+      await expect(server.closeSession({ sessionId: 'owned-session' })).rejects.toThrow('SDK server is shutting down')
     } finally {
       await server.shutdown()
       await ctx.fiber.dispose()
@@ -1288,17 +1304,88 @@ describe('HarnessSdkJsonRpcServer', () => {
       await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
       const closing = server.closeSession({ sessionId: 'serialized-close' })
       await disposeStarted.promise
+      const concurrentClosing = server.closeSession({ sessionId: 'serialized-close' })
+      let concurrentCloseSettled = false
+      void concurrentClosing.then(() => { concurrentCloseSettled = true })
+      await Promise.resolve()
+      expect(concurrentCloseSettled).toBe(false)
       const reopening = server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'second' }] })
       expect(create).toHaveBeenCalledOnce()
       expect(resume).not.toHaveBeenCalled()
 
       finishDispose.resolve(undefined)
-      await closing
+      await Promise.all([closing, concurrentClosing])
       await reopening
       expect(create).toHaveBeenCalledOnce()
       expect(resume).toHaveBeenCalledOnce()
     } finally {
       finishDispose.resolve(undefined)
+      await server.shutdown()
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('lets a close finish when an in-flight session creation fails', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-close-failed-create-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const ctx = await makeHarness(storageDir)
+    const creation = Promise.withResolvers<undefined>()
+    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async () => {
+      await creation.promise
+      throw new Error('creation failed')
+    })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    try {
+      await server.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'dsagent-model' })
+      const prompt = server.prompt({ sessionId: 'failed-close', contentBlocks: [{ type: 'text', text: 'start' }] })
+      await vi.waitFor(() => { expect(create).toHaveBeenCalledOnce() })
+      const closing = server.closeSession({ sessionId: 'failed-close' })
+      creation.resolve(undefined)
+
+      await expect(prompt).rejects.toThrow('creation failed')
+      await expect(closing).resolves.toEqual({})
+    } finally {
+      creation.resolve(undefined)
+      await server.shutdown()
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('disposes a session created after shutdown begins', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-shutdown-create-race-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const ctx = await makeHarness(storageDir)
+    const creation = Promise.withResolvers<undefined>()
+    const createAgent = ctx.agents.create.bind(ctx.agents)
+    let disposeCalls = 0
+    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async options => {
+      await creation.promise
+      const handle = await createAgent(options)
+      const dispose = async (): Promise<void> => {
+        disposeCalls++
+        await handle.dispose()
+      }
+      return { agent: handle.agent, dispose }
+    })
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    try {
+      await server.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'dsagent-model' })
+      const prompt = server.prompt({ sessionId: 'shutdown-create', contentBlocks: [{ type: 'text', text: 'start' }] })
+      await vi.waitFor(() => { expect(create).toHaveBeenCalledOnce() })
+      const shuttingDown = server.shutdown()
+      creation.resolve(undefined)
+
+      await expect(prompt).rejects.toThrow('SDK server is shutting down')
+      await expect(shuttingDown).resolves.toEqual({})
+      expect(disposeCalls).toBe(1)
+    } finally {
+      creation.resolve(undefined)
       await server.shutdown()
       await ctx.fiber.dispose()
       await rm(storageDir, { recursive: true, force: true })
