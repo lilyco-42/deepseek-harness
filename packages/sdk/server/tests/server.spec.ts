@@ -115,62 +115,60 @@ async function settleSubagent(
 }
 
 describe('HarnessSdkJsonRpcServer', () => {
-  it('relays one-shot approvals only for its exact SDK-owned agent and fails malformed answers closed', async () => {
-    const listeners = new Map<string, (...args: unknown[]) => unknown>()
-    const agent = {
-      id: SessionId('owned'),
-      session: { id: SessionId('owned') },
-      followup: vi.fn<Agent['followup']>(),
-    } as Agent
-    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
-    const ctx = {
-      on: vi.fn((event: string, listener: (...args: unknown[]) => unknown) => {
-        listeners.set(event, listener)
-        return () => undefined
-      }),
-      agents: { create: vi.fn(async () => handle), get: () => agent },
-      get: () => undefined,
-    } as Context
-    const transport = new FakeTransport()
-    transport.requestHandler = async () => ({ outcome: 'allowed-once' })
-    const server = new HarnessSdkJsonRpcServer(ctx, transport)
-    Object.defineProperty(server, 'initialized', { value: true, writable: true })
-    await server.prompt({ sessionId: 'owned', contentBlocks: [{ type: 'text', text: 'start' }] })
+  it('relays one-shot approvals only for its exact SDK-owned agent and fails malformed answers closed', { timeout: 15_000 }, async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-approval-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const ctx = await makeHarness(storageDir)
+    let server: HarnessSdkJsonRpcServer | undefined
+    let foreignHandle: AgentHandle | undefined
+    try {
+      const transport = new FakeTransport()
+      transport.requestHandler = async () => ({ outcome: 'allowed-once' })
+      const sdkServer = new HarnessSdkJsonRpcServer(ctx, transport)
+      server = sdkServer
+      await sdkServer.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'dsagent-model' })
+      await sdkServer.prompt({ sessionId: 'owned', contentBlocks: [{ type: 'text', text: 'start' }] })
 
-    const registered = listeners.get('approval/request')
-    expect(registered).toBeTypeOf('function')
-    const ask = registered as (this: Agent, request: ApprovalRequestEvent, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
-    const request = {
-      agent,
-      toolName: 'bash',
-      callId: ToolCallId('tool-call-1'),
-      reason: 'The command needs workspace-write access.',
-      rawInput: { command: 'must not cross the approval boundary' },
-    } satisfies ApprovalRequestEvent & { rawInput: object }
-    const next = vi.fn(() => Promise.resolve<ApprovalOutcome>('unavailable'))
-    const foreignAgent = { id: SessionId('foreign'), session: { id: SessionId('foreign') } } as Agent
-
-    expect(await ask.call(agent, request, next)).toBe('allowed-once')
-    expect(next).not.toHaveBeenCalled()
-    expect(transport.requests).toEqual([{
-      method: 'approval/request',
-      params: {
-        sessionId: 'owned',
+      const agent = ctx.agents.get(SessionId('owned'))
+      if (agent === undefined) throw new Error('SDK prompt did not create its owned agent')
+      const request: ApprovalRequestEvent = {
+        agent,
         toolName: 'bash',
-        callId: 'tool-call-1',
+        callId: ToolCallId('tool-call-1'),
         reason: 'The command needs workspace-write access.',
-      },
-    }])
+      }
+      const next = vi.fn(() => Promise.resolve<ApprovalOutcome>('unavailable'))
+      const outcome = await ctx.waterfall('approval/request', {
+        ...request,
+        rawInput: { command: 'must not cross the approval boundary' },
+      }, next)
 
-    transport.requestHandler = async () => ({ outcome: 'allow-everything' })
-    expect(await ask.call(agent, request, next)).toBe('unavailable')
-    expect(await ask.call(foreignAgent, {
-      ...request,
-      agent: foreignAgent,
-    }, next)).toBe('unavailable')
-    expect(next).toHaveBeenCalledOnce()
-    expect(transport.requests).toHaveLength(2)
-    await server.shutdown()
+      expect(outcome).toBe('allowed-once')
+      expect(next).not.toHaveBeenCalled()
+      expect(transport.requests).toEqual([{
+        method: 'approval/request',
+        params: {
+          sessionId: 'owned',
+          toolName: 'bash',
+          callId: 'tool-call-1',
+          reason: 'The command needs workspace-write access.',
+        },
+      }])
+
+      transport.requestHandler = async () => ({ outcome: 'allow-everything' })
+      expect(await ctx.waterfall('approval/request', request, next)).toBe('unavailable')
+      foreignHandle = await ctx.agents.create({ sessionId: SessionId('foreign'), meta: { cwd: storageDir } })
+      expect(await ctx.waterfall('approval/request', { ...request, agent: foreignHandle.agent }, next)).toBe('unavailable')
+      expect(next).toHaveBeenCalledOnce()
+      expect(transport.requests).toHaveLength(2)
+    } finally {
+      await foreignHandle?.dispose()
+      await server?.shutdown()
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
   })
 
   it('cancels and closes an SDK session, then reopens its durable history', async () => {
