@@ -1318,13 +1318,16 @@ describe('HarnessSdkJsonRpcServer', () => {
       }
     }
     const disposeAdapter = ctx.llm.registerAdapter(['mock'], new ResolvingAdapter())
-    const agent = { id: SessionId('relative-cwd'), followup: vi.fn(), cancel: vi.fn() } as Agent
-    const create = vi.spyOn(ctx.agents, 'create').mockResolvedValue({ agent, dispose: vi.fn() })
-    vi.spyOn(ctx.agents, 'get').mockReturnValue(agent)
+    const createAgent = ctx.agents.create.bind(ctx.agents)
+    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async options => {
+      const handle = await createAgent(options)
+      vi.spyOn(handle.agent, 'followup').mockImplementation(() => undefined)
+      return handle
+    })
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     try {
-      await server.initialize({ cwd: '.', provider: 'mock', model: 'model', reasoningEffort: 'high', maxTokens: 123 })
+      await server.initialize({ cwd: '.', provider: 'mock', model: 'model', reasoningEffort: ReasoningEffortId('high'), maxTokens: 123 })
       await server.prompt({ sessionId: 'relative', contentBlocks: [{ type: 'text', text: 'probe' }] })
 
       expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -1336,7 +1339,7 @@ describe('HarnessSdkJsonRpcServer', () => {
           maxTokens: 123,
         },
       }))
-      expect(agent.followup).toHaveBeenCalledOnce()
+      expect(create).toHaveBeenCalledOnce()
     } finally {
       await server.shutdown()
       disposeAdapter()
