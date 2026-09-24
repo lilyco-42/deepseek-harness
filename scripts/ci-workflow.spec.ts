@@ -1086,9 +1086,9 @@ describe('Issue lifecycle workflow', () => {
     expect(preflightStep).toMatchObject({ shell: 'bash' })
     expect(preflightStep?.run).toContain('if [ -f .github/issue-management/selective-preflight.json ]; then')
     expect(preflightStep?.run).toContain('node .github/issue-management/policy.mjs pr-preflight')
-    expect(preflightStep?.if).toBeUndefined()
+    expect(preflightStep?.if).toBe("${{ github.repository == 'deepseek-harness/deepseek-harness' }}")
     expect(policyJob.if).toBeUndefined()
-    expect(validateStep?.if).toBe("${{ steps.preflight.outputs.legacy-automated != 'true' }}")
+    expect(validateStep?.if).toBe("${{ github.repository == 'deepseek-harness/deepseek-harness' && steps.preflight.outputs.exempt != 'true' && steps.preflight.outputs.legacy-exempt != 'true' }}")
 
     expect(tokenStep).toMatchObject({
       id: 'app-token',

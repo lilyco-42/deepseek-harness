@@ -195,6 +195,11 @@ describe('HarnessSdkJsonRpcServer', () => {
       await server.closeSession({ sessionId: 'owned-session' })
       expect(() => server.cancel({ sessionId: 'owned-session' })).toThrow('SDK session is not open: owned-session')
       await server.prompt({ sessionId: 'owned-session', contentBlocks: [{ type: 'text', text: 'continue' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(2) })
+      const resumedRequest = llmServer.requests[1] as { messages: { role: string }[] }
+      expect(resumedRequest.messages.filter(message => message.role === 'user')).toHaveLength(2)
+      expect(JSON.stringify(resumedRequest.messages)).toContain('start')
+      expect(JSON.stringify(resumedRequest.messages)).toContain('continue')
     } finally {
       await server.shutdown()
       await ctx.fiber.dispose()
@@ -1259,6 +1264,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     const finishDispose = Promise.withResolvers<undefined>()
     let first = true
     const createAgent = ctx.agents.create.bind(ctx.agents)
+    const resumeAgent = ctx.agents.resume.bind(ctx.agents)
     const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async (options) => {
       const handle = await createAgent(options)
       return {
@@ -1273,6 +1279,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         },
       }
     })
+    const resume = vi.spyOn(ctx.agents, 'resume').mockImplementation(async options => resumeAgent(options))
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
     try {
       await server.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'dsagent-model' })
@@ -1281,11 +1288,13 @@ describe('HarnessSdkJsonRpcServer', () => {
       await disposeStarted.promise
       const reopening = server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'second' }] })
       expect(create).toHaveBeenCalledOnce()
+      expect(resume).not.toHaveBeenCalled()
 
       finishDispose.resolve(undefined)
       await closing
       await reopening
-      expect(create).toHaveBeenCalledTimes(2)
+      expect(create).toHaveBeenCalledOnce()
+      expect(resume).toHaveBeenCalledOnce()
     } finally {
       finishDispose.resolve(undefined)
       await server.shutdown()
@@ -1365,6 +1374,6 @@ describe('HarnessSdkJsonRpcServer', () => {
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
     await expect(server.shutdown()).rejects.toBe(listenerFailure)
-    expect(on).toHaveBeenCalledTimes(4)
+    expect(on).toHaveBeenCalledTimes(5)
   })
 })

@@ -503,7 +503,7 @@ describe('HarnessClient', () => {
 
   it('times out a hung request at the per-call bound', async () => {
     const client = processClient(fakeLaunch({
-      FAKE_HANG_PROMPT: '1',
+      FAKE_HANG_PROMPT_REQUEST: '1',
       FAKE_STDERR: 'runtime accepted initialize but hung the prompt',
     }))
     cleanups.push(() => client.close())
@@ -514,7 +514,7 @@ describe('HarnessClient', () => {
   })
 
   it('a timed-out request leaves no pending transport state', async () => {
-    const client = processClient(fakeLaunch({ FAKE_HANG_PROMPT: '1' }))
+    const client = processClient(fakeLaunch({ FAKE_HANG_PROMPT_REQUEST: '1' }))
     cleanups.push(() => client.close())
     await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' })
     for (let round = 0; round < 3; round++) {
@@ -530,7 +530,7 @@ describe('HarnessClient', () => {
   })
 
   it('applies the client-wide request timeout when no per-call bound is given', async () => {
-    const client = processClient(fakeLaunch({ FAKE_HANG_PROMPT: '1' }, { requestTimeoutMs: 400 }))
+    const client = processClient(fakeLaunch({ FAKE_HANG_PROMPT_REQUEST: '1' }, { requestTimeoutMs: 400 }))
     cleanups.push(() => client.close())
     // The bound applies from send, so it holds regardless of runtime boot time.
     await expect(client.prompt('s', normalizeInput('hi'))).rejects.toThrow(RequestTimeoutError)

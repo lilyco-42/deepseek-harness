@@ -10,7 +10,8 @@ import type {} from '@deepseek-ai/dsh-user-approval'
 import type { ApprovalOutcome, ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
 import { resolve } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import { admitEncodedImages, type EncodedImageAttachment, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, ReasoningEffortId, type ContentBlock, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf, type Scoped } from '@deepseek-ai/dsh-scope'
@@ -401,16 +402,29 @@ export class HarnessSdkJsonRpcServer {
     // rows in the host plane, so this agent reads them from the global layer. A
     // deployment that configures a roster has to join one here first
     // (@deepseek-ai/dsh-agent-preset-registry README, "Composing a child agent").
-    const handle = await this.ctx.agents.create({
-      sessionId: brandString<SessionId>(sessionId),
-      meta: { cwd: this.cwd },
-      agentOptions: {
-        provider: this.provider,
-        model: this.model,
-        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
-        ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
-      },
-    })
+    const exactSessionId = brandString<SessionId>(sessionId)
+    const agentOptions: AgentOptions = {
+      provider: this.provider,
+      model: this.model,
+      ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+      ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
+    }
+    // Closing an SDK session disposes its live Agent but deliberately retains
+    // the durable log. Check storage metadata before choosing create vs resume:
+    // replaying an existing id through create fails with SessionAlreadyExists
+    // and, more importantly, would lose the conversation the caller expects.
+    const persistence = this.ctx.get('sessionPersistence')
+    const stored = persistence === undefined ? undefined : await persistence.stat(exactSessionId)
+    const handle = stored === undefined
+      ? await this.ctx.agents.create({
+        sessionId: exactSessionId,
+        meta: { cwd: this.cwd },
+        agentOptions,
+      })
+      : await this.ctx.agents.resume({
+        resumeSessionId: exactSessionId,
+        agentOptions,
+      })
     if (this.shuttingDown) {
       await handle.dispose()
       throw new Error('SDK server is shutting down')

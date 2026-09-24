@@ -1,0 +1,54 @@
+name: ZeroStack compatibility
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/zerostack-acp-smoke.py'
+      - '.github/workflows/zerostack-compatibility.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zerostack-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: ZeroStack ACP / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: windows-x64
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v6
+        with:
+          repository: gi-dellav/zerostack
+          ref: 36dddf038941978a6079762bb2799ec7e44504de
+          path: zerostack
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build pinned ZeroStack ACP binary
+        working-directory: zerostack
+        run: cargo build --locked --release --features acp
+
+      - name: Start ACP, create a session, and record resident memory
+        run: python .github/scripts/zerostack-acp-smoke.py

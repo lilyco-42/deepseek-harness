@@ -35,7 +35,8 @@
  * - `FAKE_INIT_READY` + `FAKE_INIT_GO`: touch the READY file when `initialize`
  *   arrives, then poll for the GO file before answering (deterministic
  *   cancel-during-handshake window).
- * - `FAKE_HANG_PROMPT`: never answer `session/prompt` (for timeout/dispose tests).
+ * - `FAKE_HANG_PROMPT`: accept `session/prompt` but leave its turn running until cancellation.
+ * - `FAKE_HANG_PROMPT_REQUEST`: never answer `session/prompt` (for request-timeout tests).
  * - `FAKE_EXIT_DURING_PROMPT`: commit one interrupted assistant message, then
  *   exit 17 while the owned session run is waiting for its terminal state.
  * - `FAKE_STREAM_THEN_MALFORMED`: commit a partial assistant attempt for the
@@ -321,6 +322,7 @@ reader.on('line', (line) => {
         setImmediate(() => { process.exit(17) })
         return
       }
+      if (env.FAKE_HANG_PROMPT_REQUEST !== undefined) return
       if (env.FAKE_HANG_PROMPT !== undefined && !cancelledSessions.has(sessionId)) {
         respond({ messageId })
         return
