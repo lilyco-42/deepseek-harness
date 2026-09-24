@@ -46,11 +46,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install the Linux x64 linker
+      - name: Install mold for Linux x64
         if: matrix.platform == 'linux-x64'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes binutils
+          sudo apt-get install --yes mold
 
       - name: Build pinned ZeroStack ACP binary
         working-directory: zerostack
