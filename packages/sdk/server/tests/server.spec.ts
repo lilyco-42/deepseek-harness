@@ -1319,7 +1319,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     }
     const disposeAdapter = ctx.llm.registerAdapter(['mock'], new ResolvingAdapter())
     const createAgent = ctx.agents.create.bind(ctx.agents)
-    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async options => {
+    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async (options) => {
       const handle = await createAgent(options)
       vi.spyOn(handle.agent, 'followup').mockImplementation(() => undefined)
       return handle
