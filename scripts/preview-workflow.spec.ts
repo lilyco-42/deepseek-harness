@@ -10,7 +10,15 @@ const workflow = yaml.load(readFileSync(resolve(import.meta.dirname, '../.github
   env: Record<string, string>
   jobs: Record<'preview', {
     'runs-on': string
-    steps: Array<{ id?: string; if?: string; name?: string; uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, string> }>
+    steps: Array<{
+      id?: string
+      if?: string
+      name?: string
+      uses?: string
+      run?: string
+      with?: Record<string, unknown>
+      env?: Record<string, string>
+    }>
   }>
 }
 const preview = workflow.jobs.preview

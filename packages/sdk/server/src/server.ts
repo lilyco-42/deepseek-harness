@@ -373,10 +373,12 @@ export class HarnessSdkJsonRpcServer {
   }
 
   private async getOrCreateSession(sessionId: string): Promise<SessionRecord> {
-    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    this.assertNotShuttingDown()
     const closing = this.sessionClosures.get(sessionId)
-    if (closing !== undefined) await closing
-    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    if (closing !== undefined) {
+      await closing
+      this.assertNotShuttingDown()
+    }
     const existing = this.sessions.get(sessionId)
     if (existing) return existing
     const pending = this.sessionCreations.get(sessionId)
@@ -388,6 +390,10 @@ export class HarnessSdkJsonRpcServer {
       () => { this.sessionCreations.delete(sessionId) },
     )
     return creation
+  }
+
+  private assertNotShuttingDown(): void {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
   }
 
   private async createSession(sessionId: string): Promise<SessionRecord> {

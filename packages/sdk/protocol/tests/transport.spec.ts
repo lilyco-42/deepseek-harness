@@ -89,7 +89,10 @@ describe('JsonRpcLineTransport', () => {
     a.onRequest((_method, _params, signal) => {
       handled.resolve(signal)
       return new Promise((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        signal.addEventListener('abort', () => {
+          const reason: unknown = signal.reason
+          reject(reason instanceof Error ? reason : new Error(String(reason)))
+        }, { once: true })
       })
     })
     a.start()

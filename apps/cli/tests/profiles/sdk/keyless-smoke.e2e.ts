@@ -530,14 +530,16 @@ describe('Python SDK dsh profile keyless smoke', () => {
       expect(await readFile(outputFile, 'utf8')).toBe('approved\n')
       expect(modelRequests).toHaveLength(3)
       const finalMessages = modelRequests[2]?.messages as { role?: string; content?: unknown }[]
-      expect(finalMessages).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          role: 'user',
-          content: expect.arrayContaining([
-            expect.objectContaining({ type: 'tool_result', tool_use_id: 'approval-call-2', is_error: false }),
-          ]),
-        }),
-      ]))
+      const approvalResult = finalMessages.find((message) => {
+        if (message.role !== 'user' || !Array.isArray(message.content)) return false
+        return message.content.some((part: unknown) => {
+          if (typeof part !== 'object' || part === null) return false
+          return 'type' in part && part.type === 'tool_result'
+            && 'tool_use_id' in part && part.tool_use_id === 'approval-call-2'
+            && 'is_error' in part && part.is_error === false
+        })
+      })
+      expect(approvalResult).toBeDefined()
 
       await send(3, 'shutdown')
       const exit = await child
