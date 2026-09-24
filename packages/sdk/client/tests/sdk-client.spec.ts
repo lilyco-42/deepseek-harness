@@ -239,6 +239,41 @@ describe('DeepSeekHarness', () => {
     await harness.close()
   })
 
+  it('cancels a running session without closing the runtime', async () => {
+    const harness = harnessWith({ FAKE_HANG_PROMPT: '1' })
+    const session = harness.session('cancel-me')
+    const receipt = Promise.withResolvers<void>()
+    const running = session.run('wait for cancellation', {
+      onNotification: (notification) => {
+        const event = notification.params.event
+        if (notification.method === 'session.event'
+          && notification.params.sessionId === session.id
+          && typeof event === 'object' && event !== null && 'type' in event
+          && event.type === 'agent/inbox/spliced') receipt.resolve()
+      },
+    })
+
+    await receipt.promise
+    await session.cancel()
+    const result = await running
+
+    expect(result.sessionId).toBe('cancel-me')
+    expect(result.events.find(event => event.type === 'turn/end'))
+      .toMatchObject({ data: { reason: { kind: 'aborted' } } })
+    expect((await session.run('runtime still available')).finalResponse).toBe('hello from fake runtime')
+  })
+
+  it('closes one session without shutting down the runtime', async () => {
+    const harness = harnessWith()
+    const session = harness.session('close-me')
+    await session.run('first turn')
+
+    await session.close()
+    await session.close()
+
+    expect((await harness.run('other session works')).finalResponse).toBe('hello from fake runtime')
+  })
+
   it('keeps events root-scoped while streaming notifications for the session tree', async () => {
     const harness = harnessWith({ FAKE_SUBAGENT: '1' })
     const seen: HarnessNotification[] = []

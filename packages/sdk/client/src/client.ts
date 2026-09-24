@@ -18,6 +18,8 @@ import {
   JsonRpcResponseError,
   type InitializeParams,
   type InitializeResult,
+  type SessionCancelParams,
+  type SessionCloseParams,
   type SessionPromptParams,
   type SdkPromptContentBlock,
 } from '@deepseek-ai/dsh-sdk-protocol'
@@ -178,9 +180,8 @@ class NotificationSubscriptionImpl implements NotificationSubscription {
  *
  * The subprocess starts lazily on {@link start} and is owned by this instance
  * until {@link close}, which requests protocol `shutdown` and then walks the
- * shared EOF → SIGTERM → SIGKILL dispose ladder to quiescence. There is no
- * wire-level cancel: a timed-out request stays running server-side until the
- * runtime is closed.
+ * shared EOF → SIGTERM → SIGKILL dispose ladder to quiescence. Session
+ * cancellation and close remain scoped to SDK-created agents.
  */
 export class HarnessClient {
   /** Original public dsh launch and timeout options for this client. */
@@ -295,6 +296,27 @@ export class HarnessClient {
       throw new SdkProtocolError(`session/prompt returned no message id: ${JSON.stringify(result)}`)
     }
     return result.messageId
+  }
+
+  /**
+   * Cancel the current work for one SDK session.
+   * @param sessionId - the target session id.
+   * @returns settlement of the cancellation request.
+   */
+  async cancelSession(sessionId: string): Promise<void> {
+    const params: SessionCancelParams = { sessionId }
+    await this.request('session/cancel', params)
+  }
+
+  /**
+   * Dispose one live SDK agent without closing the runtime process; a later
+   * prompt with the same id can reopen its durable history.
+   * @param sessionId - the target session id.
+   * @returns settlement of the close request.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    const params: SessionCloseParams = { sessionId }
+    await this.request('session/close', params)
   }
 
   /**

@@ -15,7 +15,7 @@ from typing import Callable, TypeAlias, TypeVar
 from pydantic import BaseModel
 
 from .errors import JsonRpcError, TransportClosedError
-from .models import IncomingRequest, InitializeResponse, JsonObject, JsonValue, Notification
+from .models import IncomingRequest, InitializeResponse, JsonObject, JsonValue, Notification, SessionOperationResponse
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NotificationFilter: TypeAlias = Callable[[Notification], bool]
@@ -187,6 +187,22 @@ class HarnessClient:
             notification_subscription=notification_subscription,
         )
         return response.messageId
+
+    def session_cancel(self, session_id: str) -> None:
+        """Cancel current work for one SDK-owned session."""
+        self.request(
+            "session/cancel",
+            {"sessionId": session_id},
+            response_model=SessionOperationResponse,
+        )
+
+    def session_close(self, session_id: str) -> None:
+        """Dispose one live agent; durable history can be reopened with a later prompt."""
+        self.request(
+            "session/close",
+            {"sessionId": session_id},
+            response_model=SessionOperationResponse,
+        )
 
     def request(
         self,

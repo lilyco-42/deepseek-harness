@@ -19,6 +19,8 @@ export type {
   SdkPromptContentBlock,
   SdkRunStatus,
   SessionEventNotification,
+  SessionCancelParams,
+  SessionCloseParams,
   SessionStatusNotification,
   SessionPromptParams,
   SessionPromptResult,

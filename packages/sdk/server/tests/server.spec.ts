@@ -109,6 +109,36 @@ async function settleSubagent(
 }
 
 describe('HarnessSdkJsonRpcServer', () => {
+  it('cancels and closes an SDK session, then reopens its durable history', async () => {
+    const followup = vi.fn<Agent['followup']>()
+    const cancel = vi.fn<Agent['cancel']>()
+    const agent = ({ id: SessionId('owned-session'), followup, cancel } satisfies Pick<Agent, 'id' | 'followup' | 'cancel'>) as unknown as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create: vi.fn(async () => handle), get: () => agent },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+    expect(() => server.cancel({ sessionId: 'owned-session' })).toThrow('SDK server is not initialized')
+    await expect(server.closeSession({ sessionId: 'owned-session' }))
+      .rejects.toThrow('SDK server is not initialized')
+    ;(server as unknown as { initialized: boolean }).initialized = true
+    await server.prompt({ sessionId: 'owned-session', contentBlocks: [{ type: 'text', text: 'start' }] })
+
+    await server.handleRequest('session/cancel', { sessionId: 'owned-session' })
+    expect(cancel).toHaveBeenCalledWith({ kind: 'user' })
+    await server.handleRequest('session/close', { sessionId: 'owned-session' })
+    await server.closeSession({ sessionId: 'owned-session' })
+    expect(handle.dispose).toHaveBeenCalledOnce()
+    expect(() => server.cancel({ sessionId: 'owned-session' })).toThrow('SDK session is not open: owned-session')
+    await server.prompt({ sessionId: 'owned-session', contentBlocks: [{ type: 'text', text: 'continue' }] })
+    expect(followup).toHaveBeenCalledTimes(2)
+
+    await server.shutdown()
+  })
+
   it('creates a harness agent and calls the configured OpenAI-compatible endpoint', { timeout: 15_000 }, async () => {
     const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-'))
     const llmServer = await mockCompletionServer()
@@ -1124,6 +1154,73 @@ describe('HarnessSdkJsonRpcServer', () => {
     expect(sharedHandle.dispose).toHaveBeenCalledOnce()
     expect(retryHandle.dispose).toHaveBeenCalledOnce()
     await expect(server.getOrCreateSession('after-shutdown')).rejects.toThrow('SDK server is shutting down')
+  })
+
+  it('disposes a session whose creation races with a close request', async () => {
+    let resolveCreation: ((handle: AgentHandle) => void) | undefined
+    const creation = new Promise<AgentHandle>((resolve) => { resolveCreation = resolve })
+    const handle = { agent: {} as Agent, dispose: vi.fn(() => Promise.resolve()) }
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create: vi.fn(() => creation), get: () => undefined },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    ;(server as unknown as { initialized: boolean }).initialized = true
+
+    const prompt = server.prompt({ sessionId: 'close-race', contentBlocks: [{ type: 'text', text: 'start' }] })
+    await vi.waitFor(() => { expect(ctx.agents.create).toHaveBeenCalledOnce() })
+    const closing = server.closeSession({ sessionId: 'close-race' })
+    resolveCreation?.(handle)
+
+    await expect(prompt).rejects.toThrow('SDK session is not open: close-race')
+    await expect(closing).resolves.toEqual({})
+    expect(handle.dispose).toHaveBeenCalledOnce()
+    await server.shutdown()
+  })
+
+  it('waits for session disposal before reopening the same id', async () => {
+    const disposeStarted = Promise.withResolvers<void>()
+    const finishDispose = Promise.withResolvers<void>()
+    let liveAgent: Agent | undefined
+    let first = true
+    const create = vi.fn(async () => {
+      const agent = {
+        id: SessionId('serialized-close'),
+        followup: vi.fn<Agent['followup']>(),
+        cancel: vi.fn<Agent['cancel']>(),
+      } as unknown as Agent
+      liveAgent = agent
+      return {
+        agent,
+        dispose: vi.fn(async () => {
+          if (!first) return
+          first = false
+          disposeStarted.resolve()
+          await finishDispose.promise
+          if (liveAgent === agent) liveAgent = undefined
+        }),
+      }
+    })
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, get: (id: string) => liveAgent?.id === id ? liveAgent : undefined },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    ;(server as unknown as { initialized: boolean }).initialized = true
+
+    await server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'first' }] })
+    const closing = server.closeSession({ sessionId: 'serialized-close' })
+    await disposeStarted.promise
+    const reopening = server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'second' }] })
+    expect(create).toHaveBeenCalledOnce()
+
+    finishDispose.resolve()
+    await closing
+    await reopening
+    expect(create).toHaveBeenCalledTimes(2)
+    await server.shutdown()
   })
 
   it('resolves a relative cwd before creating the session', async () => {

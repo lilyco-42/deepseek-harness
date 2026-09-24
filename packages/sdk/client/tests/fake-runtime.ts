@@ -79,6 +79,7 @@ function notify(method: string, params: object): void {
 }
 
 let seq = 0
+const cancelledSessions = new Set<string>()
 function event(sessionId: string, type: string, data: object): void {
   notify('session.event', { sessionId, event: { type, seq: seq++, time: 0, data } })
 }
@@ -301,7 +302,10 @@ reader.on('line', (line) => {
         setImmediate(() => { process.exit(17) })
         return
       }
-      if (env.FAKE_HANG_PROMPT !== undefined) return
+      if (env.FAKE_HANG_PROMPT !== undefined && !cancelledSessions.has(sessionId)) {
+        respond({ messageId })
+        return
+      }
       if (env.FAKE_MALFORMED !== undefined || env.FAKE_MALFORMED_PROMPT !== undefined) {
         respond({})
         return
@@ -311,6 +315,19 @@ reader.on('line', (line) => {
       respond({ messageId })
       return
     }
+    case 'session/cancel': {
+      const sessionId = sessionIdOf(frame.params)
+      if (env.FAKE_HANG_PROMPT !== undefined) {
+        cancelledSessions.add(sessionId)
+        event(sessionId, 'turn/end', { turn: 0, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+        notify('session.status', { sessionId, status: 'idle' })
+      }
+      respond({})
+      return
+    }
+    case 'session/close':
+      respond({})
+      return
     case 'shutdown':
       respond({})
       // An EOF-ignoring fake also refuses the protocol exit, so the client's

@@ -201,6 +201,102 @@ describe('Python SDK dsh profile keyless smoke', () => {
     }
   }, 40_000)
 
+  it('cancels a running turn and reopens durable history after session close', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdk-session-lifecycle-'))
+    const modelRequests: Record<string, unknown>[] = []
+    const secondModelRequest = Promise.withResolvers<void>()
+    const modelServer = createServer((request, response) => {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk: string) => { body += chunk })
+      request.on('end', () => {
+        const payload = JSON.parse(body) as Record<string, unknown>
+        modelRequests.push(payload)
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        if (JSON.stringify(payload).includes('cancel this pending turn')) {
+          response.flushHeaders()
+          secondModelRequest.resolve()
+          return
+        }
+        response.end(messagesResponse({ type: 'text', text: 'done' }, 'end_turn'))
+      })
+    })
+    await new Promise<void>(resolve => modelServer.listen(0, '127.0.0.1', resolve))
+    const address = modelServer.address()
+    if (address === null || typeof address === 'string') throw new Error('model server did not bind a TCP port')
+    const child = execa(launch.command, [...launch.args, '--profile', 'sdk'], {
+      cwd: repoRoot,
+      env: {
+        ...launch.env,
+        DSH_HOME: join(root, '.dsh'),
+        DSH_TELEMETRY_DISABLED: '1',
+        DEEPSEEK_API_KEY: 'session-lifecycle-no-call',
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${address.port}`,
+      },
+      timeout: 35_000,
+      killSignal: 'SIGKILL',
+      reject: false,
+    })
+    const lines: string[] = []
+    let stdoutBuffer = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString('utf8')
+      const parts = stdoutBuffer.split('\n')
+      stdoutBuffer = parts.pop() ?? ''
+      lines.push(...parts)
+    })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+
+    const send = (id: number, method: string, params?: Record<string, unknown>) => {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) })}\n`)
+      return waitForLine(lines, value => value.id === id, () => stderr)
+    }
+    const turnEnd = (kind: string) => waitForLine(lines, (value) => {
+      if (value.method !== 'session.event') return false
+      const params = value.params as Record<string, unknown> | undefined
+      const event = params?.event as Record<string, unknown> | undefined
+      const data = event?.data as Record<string, unknown> | undefined
+      const reason = data?.reason as Record<string, unknown> | undefined
+      return params?.sessionId === 'lifecycle' && event?.type === 'turn/end' && reason?.kind === kind
+    }, () => stderr)
+
+    try {
+      await send(1, 'initialize', { cwd: root, provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+      await send(2, 'session/prompt', {
+        sessionId: 'lifecycle', contentBlocks: [{ type: 'text', text: 'first durable turn' }],
+      })
+      await turnEnd('completed')
+
+      await send(3, 'session/prompt', {
+        sessionId: 'lifecycle', contentBlocks: [{ type: 'text', text: 'cancel this pending turn' }],
+      })
+      await secondModelRequest.promise
+      await send(4, 'session/cancel', { sessionId: 'lifecycle' })
+      await turnEnd('aborted')
+      await send(5, 'session/close', { sessionId: 'lifecycle' })
+
+      await send(6, 'session/prompt', {
+        sessionId: 'lifecycle', contentBlocks: [{ type: 'text', text: 'continue after close' }],
+      })
+      await turnEnd('completed')
+      const resumedHistory = modelRequests.find(request => JSON.stringify(request).includes('continue after close'))
+      expect(resumedHistory).toBeDefined()
+      expect(JSON.stringify(resumedHistory)).toContain('first durable turn')
+
+      await send(7, 'shutdown')
+      const exit = await child
+      expect(exit.timedOut, stderr).toBe(false)
+      expect(exit.signal, stderr).toBeUndefined()
+      expect(exit.exitCode, `signal=${String(exit.signal)}; stderr=${stderr}`).toBe(0)
+    } finally {
+      child.kill('SIGKILL')
+      await child
+      await new Promise<void>(resolve => modelServer.close(() => { resolve() }))
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 40_000)
+
   it.each([
     { label: 'boots the standalone minimal profile through its generated manifest', editorEnabled: false },
     { label: 'executes the documented editor opt-in patch with sdk-minimal', editorEnabled: true },

@@ -30,3 +30,7 @@ class ServerInfo(BaseModel):
 
 class InitializeResponse(BaseModel):
     serverInfo: ServerInfo | None = None
+
+
+class SessionOperationResponse(BaseModel):
+    """Empty acknowledgement for a successful session lifecycle request."""

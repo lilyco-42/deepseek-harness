@@ -58,6 +58,18 @@ export interface SessionPromptResult {
   messageId: string
 }
 
+/** Target for a user cancellation of one SDK-owned agent. */
+export interface SessionCancelParams {
+  /** The SDK session id to cancel. */
+  sessionId: string
+}
+
+/** Target for disposing one SDK-owned agent without shutting down the runtime. */
+export interface SessionCloseParams {
+  /** The SDK session id to close. */
+  sessionId: string
+}
+
 /** Deployment-mapped SDK outcome: `ok` for an accepted result, `error` otherwise. */
 export type SdkRunStatus = 'ok' | 'error'
 
@@ -115,5 +127,7 @@ export interface HarnessSdkNotificationMap {
 export interface HarnessSdkRequestMap {
   'initialize': { params: InitializeParams; result: InitializeResult }
   'session/prompt': { params: SessionPromptParams; result: SessionPromptResult }
+  'session/cancel': { params: SessionCancelParams; result: Record<string, never> }
+  'session/close': { params: SessionCloseParams; result: Record<string, never> }
   'shutdown': { params: undefined; result: Record<string, never> }
 }
