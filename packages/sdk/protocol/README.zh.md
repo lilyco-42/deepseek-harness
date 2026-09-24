@@ -33,7 +33,7 @@ kind: "package-library"
 
 ### SDK 方法
 
-两个协议端共享同一套方法：五个客户端到服务端请求与四个服务端到客户端通知。
+两个协议端共享同一套方法：五个客户端到服务端请求、一个服务端到客户端审批请求，以及四个服务端到客户端通知。
 
 | 方向 | 方法 | 载荷类型 |
 |---|---|---|
@@ -42,18 +42,19 @@ kind: "package-library"
 | client→server | `session/cancel` | `SessionCancelParams` → `{}`（请求取消该会话的当前工作） |
 | client→server | `session/close` | `SessionCloseParams` → `{}`（释放存活的 SDK agent；之后的提示词会重新打开其持久历史） |
 | client→server | `shutdown` | 无参数 → `{}` |
+| server→client | `approval/request` | `SdkApprovalRequestParams` → `SdkApprovalRequestResult`（单次人工决定） |
 | server→client | `session.event` | `SessionEventNotification`（运行时内每个会话，不过滤） |
 | server→client | `session.status` | `SessionStatusNotification`（整个 agent（智能体）的 `running`/`idle` 转换） |
 | server→client | `subagent.started` | `SubagentStartedNotification` |
 | server→client | `subagent.finished` | `SubagentFinishedNotification`（仅进程内运行） |
 
-`HarnessSdkRequestMap` 与 `HarnessSdkNotificationMap` 按方法名索引这些结构；包根与传输一起导出它们。
+`HarnessSdkRequestMap`、`HarnessSdkHostRequestMap` 与 `HarnessSdkNotificationMap` 按方法名索引这些结构；包根与传输一起导出它们。
 
 关闭会话只释放其存活的 agent。持久历史仍会保留，之后使用相同 id 发送提示词即可重新打开。
 
 ### 载荷语义
 
-`SessionPromptResult.messageId` 标识已排队的用户消息；它不标识后续的助手消息、轮次结束或提示词结果。`session/cancel` 会请求用户取消当前工作，但不会等待活动结束；需观察后续 `session.status` 空闲转换。`session/close` 会释放存活的 SDK agent，同时保留持久会话数据与运行时。`SdkPromptContentBlock` 接受普通持久内容以及 `SdkEncodedImageBlock { type: "image", data, mimeType }`；服务器在入队前把编码图像转换为持久引用。`InitializeParams.reasoningEffort` 是所选提供方／模型路由可选的非空适配器自有标识符；省略时保留该模型的默认值。`InitializeParams.maxTokens` 是可选的正安全整数，用于限制 SDK 创建的 agent 及其进程内后代的每次对话模型输出；省略时应用所选适配器的确切模型默认值。服务器会在初始化期间解析确切路由，并在握手成功前拒绝 `session/prompt`，因此缺少适配器、模型不可用或推理强度不受支持时，不会回退到构造期默认值。`SubagentFinishedNotification.lastAssistantMessage` 携带子 agent 最后一条非空 assistant 消息；若不存在这类消息，则携带其累积的 assistant 文本；子 agent 两种输出均未产生时，该字段缺省。`serverInfo.name` 的协议值固定为 `deepseek-harness-sdk-runtime`。通知载荷依赖 `SessionEvent`（`dsh-session`）、`ContentBlock`（`dsh-llm`）与 `SubagentStopReason`（`dsh-subagent`），因此会话词汇是协议格式约定的一部分。
+`SessionPromptResult.messageId` 标识已排队的用户消息；它不标识后续的助手消息、轮次结束或提示词结果。`session/cancel` 会请求用户取消当前工作，但不会等待活动结束；需观察后续 `session.status` 空闲转换。`session/close` 会释放存活的 SDK agent，同时保留持久会话数据与运行时。`approval/request` 只携带所属会话、工具名、可选调用 ID 和工具提供的理由，不会复制工具参数或凭据。宿主必须返回 `allowed-once`、`rejected`、`cancelled` 或 `unavailable` 之一；缺少处理器、错误应答和回调失败都会安全拒绝。活动被取消时，`$/cancelRequest` 会中止宿主处理器，以便关闭待处理的审批界面。`SdkPromptContentBlock` 接受普通持久内容以及 `SdkEncodedImageBlock { type: "image", data, mimeType }`；服务器在入队前把编码图像转换为持久引用。`InitializeParams.reasoningEffort` 是所选提供方／模型路由可选的非空适配器自有标识符；省略时保留该模型的默认值。`InitializeParams.maxTokens` 是可选的正安全整数，用于限制 SDK 创建的 agent 及其进程内后代的每次对话模型输出；省略时应用所选适配器的确切模型默认值。服务器会在初始化期间解析确切路由，并在握手成功前拒绝 `session/prompt`，因此缺少适配器、模型不可用或推理强度不受支持时，不会回退到构造期默认值。`SubagentFinishedNotification.lastAssistantMessage` 携带子 agent 最后一条非空 assistant 消息；若不存在这类消息，则携带其累积的 assistant 文本；子 agent 两种输出均未产生时，该字段缺省。`serverInfo.name` 的协议值固定为 `deepseek-harness-sdk-runtime`。通知载荷依赖 `SessionEvent`（`dsh-session`）、`ContentBlock`（`dsh-llm`）与 `SubagentStopReason`（`dsh-subagent`），因此会话词汇是协议格式约定的一部分。
 
 -----
 
@@ -116,7 +117,7 @@ kind: "package-library"
 
 - **无协议版本协商**——握手只携带 `serverInfo.version`（`0.0.1`，客户端不校验）；处于预发布阶段，无兼容承诺。
 - **没有逐提示词结果**——取消只会请求中止；调用方应观察后续会话事件与状态，才能判断活动如何结束。
-- **server→client 请求是未使用的能力**——传输层支持，但服务器从不发送；Python SDK 的应答接口为未来审批流程预留。
+- **审批界面由宿主负责**——协议传递问题与答案，但不提供 UI；未配置审批处理器时，宿主返回 `unavailable`。
 
 <a id="dev-note"></a>
 ### 开发备注

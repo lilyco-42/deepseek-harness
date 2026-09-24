@@ -83,6 +83,29 @@ describe('JsonRpcLineTransport', () => {
     b.close()
   })
 
+  it('propagates request cancellation to a peer handling the request', async () => {
+    const { a, b } = transportPair()
+    const handled = Promise.withResolvers<AbortSignal>()
+    a.onRequest((_method, _params, signal) => {
+      handled.resolve(signal)
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    })
+    a.start()
+    b.start()
+
+    const controller = new AbortController()
+    const pending = b.request('approval/request', { sessionId: 'main' }, controller.signal)
+    const requestSignal = await handled.promise
+    controller.abort(new Error('turn cancelled'))
+
+    await expect(pending).rejects.toThrow('turn cancelled')
+    expect(requestSignal.aborted).toBe(true)
+    a.close()
+    b.close()
+  })
+
   it('preserves structured error data from an error response frame', async () => {
     const { aToB, bToA, b } = transportPair()
     b.start()

@@ -16,6 +16,8 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import {
   JsonRpcLineTransport,
   JsonRpcResponseError,
+  type SdkApprovalOutcome,
+  type SdkApprovalRequestParams,
   type InitializeParams,
   type InitializeResult,
   type SessionCancelParams,
@@ -264,6 +266,12 @@ export class HarnessClient {
       this.transport?.close()
     })
     const transport = new JsonRpcLineTransport(child.stdout, child.stdin)
+    transport.onRequest(async (method, params, signal) => {
+      if (method !== 'approval/request') throw new SdkProtocolError(`unsupported runtime request: ${method}`)
+      const request = validateApprovalRequest(params)
+      const outcome = await this.options.onApprovalRequest?.(request, signal) ?? 'unavailable'
+      return { outcome: isApprovalOutcome(outcome) ? outcome : 'unavailable' }
+    })
     transport.onNotification((method, params) => { this.dispatchNotification({ method, params }) })
     transport.start()
     this.transport = transport
@@ -489,12 +497,12 @@ export class HarnessClient {
 }
 
 /** Construct the transport against a generic process for package-local fake-runtime tests. */
-export function createProcessHarnessClient(options: RuntimeProcessOptions): HarnessClient {
+export function createProcessHarnessClient(runtime: RuntimeProcessOptions, options: HarnessClientOptions = {}): HarnessClient {
   const Constructor = HarnessClient as new (
     publicOptions: HarnessClientOptions,
     runtime: RuntimeProcessOptions,
   ) => HarnessClient
-  return new Constructor({}, options)
+  return new Constructor(options, runtime)
 }
 
 /**
@@ -510,4 +518,28 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   /* v8 ignore next -- the transport and dispose ladder reject only with Errors */
   return error instanceof Error ? error.message : String(error)
+}
+
+function isApprovalOutcome(value: unknown): value is SdkApprovalOutcome {
+  switch (value) {
+    case 'allowed-once':
+    case 'rejected':
+    case 'cancelled':
+    case 'unavailable': return true
+    default: return false
+  }
+}
+
+function validateApprovalRequest(value: Record<string, unknown>): SdkApprovalRequestParams {
+  if (typeof value.sessionId !== 'string' || typeof value.toolName !== 'string'
+    || (value.callId !== undefined && typeof value.callId !== 'string')
+    || (value.reason !== undefined && typeof value.reason !== 'string')) {
+    throw new SdkProtocolError('approval/request carried malformed parameters')
+  }
+  return {
+    sessionId: value.sessionId,
+    toolName: value.toolName,
+    ...(value.callId === undefined ? {} : { callId: value.callId }),
+    ...(value.reason === undefined ? {} : { reason: value.reason }),
+  }
 }

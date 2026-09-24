@@ -58,6 +58,44 @@ for line in sys.stdin:
     ]
 
 
+def test_incoming_approval_request_and_peer_cancellation_are_exposed_to_host(tmp_path: Path) -> None:
+    script = tmp_path / "approval_runtime.py"
+    script.write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {"serverInfo": {"name": "test", "version": "1"}}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": "approval-1", "method": "approval/request", "params": {"sessionId": "main", "toolName": "bash", "callId": "call-1", "reason": "workspace write"}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "method": "$/cancelRequest", "params": {"id": "approval-1"}}), flush=True)
+    elif method == "shutdown":
+        print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {}}), flush=True)
+        break
+""".strip()
+    )
+
+    client = HarnessClient(
+        HarnessConfig(cwd=str(tmp_path)),
+        _launch_args=(sys.executable, str(script)),
+    )
+    client.start()
+    client.initialize(cwd=str(tmp_path), provider="test", model="test")
+    request = client.next_request()
+    assert request.method == "approval/request"
+    assert request.payload == {
+        "sessionId": "main",
+        "toolName": "bash",
+        "callId": "call-1",
+        "reason": "workspace write",
+    }
+    assert request.cancelled.wait(timeout=1)
+    client.close()
+
+
 def test_high_level_sdk_runs_turn_and_preserves_auto_review_errors(tmp_path: Path) -> None:
     script = tmp_path / "fake_runtime.py"
     env_dump = tmp_path / "env.json"

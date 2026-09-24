@@ -225,7 +225,13 @@ const reader = createInterface({ input: process.stdin })
 reader.on('line', (line) => {
   if (line.trim().length === 0) return
   const frame = JSON.parse(line) as { id?: string | number; method?: string; params?: Record<string, unknown> }
-  if (frame.method === undefined || frame.id === undefined) return
+  if (frame.method === undefined) {
+    if (env.FAKE_APPROVAL_RESULT_FILE !== undefined && frame.id !== undefined) {
+      appendFileSync(env.FAKE_APPROVAL_RESULT_FILE, `${line}\n`)
+    }
+    return
+  }
+  if (frame.id === undefined) return
   const respond = (result: object): void => { write({ jsonrpc: '2.0', id: frame.id, result }) }
   switch (frame.method) {
     case 'initialize':
@@ -260,6 +266,19 @@ reader.on('line', (line) => {
         return
       }
       respond({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } })
+      if (env.FAKE_APPROVAL_RESULT_FILE !== undefined) {
+        write({
+          jsonrpc: '2.0',
+          id: 'runtime-approval-1',
+          method: 'approval/request',
+          params: {
+            sessionId: 'fake-session',
+            toolName: 'bash',
+            callId: 'tool-1',
+            reason: 'test approval',
+          },
+        })
+      }
       return
     case 'session/prompt': {
       const sessionId = sessionIdOf(frame.params)

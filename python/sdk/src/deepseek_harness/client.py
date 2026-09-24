@@ -57,6 +57,7 @@ class HarnessClient:
         ] = {}
         self._session_parents: dict[str, str] = {}
         self._requests: queue.Queue[IncomingRequest | BaseException] = queue.Queue()
+        self._incoming_requests: dict[str | int, IncomingRequest] = {}
         self._stderr_lines: deque[str] = deque(maxlen=400)
         self._reader_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
@@ -260,6 +261,8 @@ class HarnessClient:
         return item
 
     def respond(self, request_id: str | int, result: JsonValue) -> None:
+        with self._lock:
+            self._incoming_requests.pop(request_id, None)
         self._write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
 
     def respond_error(
@@ -270,6 +273,8 @@ class HarnessClient:
         message: str,
         data: JsonValue | None = None,
     ) -> None:
+        with self._lock:
+            self._incoming_requests.pop(request_id, None)
         error: JsonObject = {"code": code, "message": message}
         if data is not None:
             error["data"] = data
@@ -395,11 +400,14 @@ class HarnessClient:
             return
         msg_id = message.get("id")
         method = message.get("method")
-        if isinstance(msg_id, (str, int)) and isinstance(method, str):
+        if isinstance(msg_id, (str, int)) and not isinstance(msg_id, bool) and isinstance(method, str):
             params = message.get("params")
-            self._requests.put(IncomingRequest(id=msg_id, method=method, payload=params if isinstance(params, dict) else {}))
+            request = IncomingRequest(id=msg_id, method=method, payload=params if isinstance(params, dict) else {})
+            with self._lock:
+                self._incoming_requests[msg_id] = request
+            self._requests.put(request)
             return
-        if isinstance(msg_id, (str, int)):
+        if isinstance(msg_id, (str, int)) and not isinstance(msg_id, bool):
             with self._lock:
                 waiter = self._responses.pop(str(msg_id), None)
             if waiter is None:
@@ -412,6 +420,14 @@ class HarnessClient:
             return
         if isinstance(method, str):
             params = message.get("params")
+            if method == "$/cancelRequest" and isinstance(params, dict):
+                request_id = params.get("id")
+                if isinstance(request_id, (str, int)) and not isinstance(request_id, bool):
+                    with self._lock:
+                        request = self._incoming_requests.pop(request_id, None)
+                    if request is not None:
+                        request.cancelled.set()
+                return
             notification = Notification(method=method, payload=params if isinstance(params, dict) else {})
             with self._lock:
                 self._record_session_relationship_locked(notification)
@@ -437,8 +453,12 @@ class HarnessClient:
         with self._lock:
             waiters = list(self._responses.values())
             self._responses.clear()
+            incoming = list(self._incoming_requests.values())
+            self._incoming_requests.clear()
             subscribers = list(self._notification_subscribers.values())
             self._notification_subscribers.clear()
+        for request in incoming:
+            request.cancelled.set()
         for waiter in waiters:
             waiter.put(exc)
         for subscriber, _predicate in subscribers:

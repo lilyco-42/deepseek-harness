@@ -24,6 +24,7 @@ import {
 import { createProcessDeepSeekHarness, finalResponse, normalizeInput } from '../src/api.ts'
 import { createProcessHarnessClient } from '../src/client.ts'
 import type { RuntimeProcessOptions } from '../src/launch.ts'
+import type { HarnessClientOptions } from '../src/types.ts'
 
 const fakeRuntime = fileURLToPath(new URL('./fake-runtime.ts', import.meta.url))
 
@@ -46,8 +47,8 @@ function fakeLaunch(env: Record<string, string> = {}, extra: LaunchOverrides = {
   }
 }
 
-function processClient(options: RuntimeProcessOptions): HarnessClient {
-  return createProcessHarnessClient(options)
+function processClient(options: RuntimeProcessOptions, clientOptions?: HarnessClientOptions): HarnessClient {
+  return createProcessHarnessClient(options, clientOptions)
 }
 
 function harnessWith(env: Record<string, string> = {}, extra: LaunchOverrides = {}): DeepSeekHarness {
@@ -440,6 +441,47 @@ describe('DeepSeekHarness', () => {
 })
 
 describe('HarnessClient', () => {
+  it('surfaces runtime approval requests to the host and validates the one-shot result', async () => {
+    const dir = await tempDir('sdk-client-approval-')
+    const resultFile = join(dir, 'approval-result.jsonl')
+    const seen: unknown[] = []
+    const client = processClient(fakeLaunch({ FAKE_APPROVAL_RESULT_FILE: resultFile }), {
+      onApprovalRequest: (request, signal) => {
+        seen.push({ request, aborted: signal.aborted })
+        return 'allowed-once'
+      },
+    })
+    cleanups.push(() => client.close())
+
+    await client.initialize({ cwd: dir, provider: 'fake', model: 'fake' })
+    await vi.waitFor(async () => {
+      expect(await readFile(resultFile, 'utf8')).toContain('allowed-once')
+    })
+    expect(seen).toEqual([{
+      request: {
+        sessionId: 'fake-session',
+        toolName: 'bash',
+        callId: 'tool-1',
+        reason: 'test approval',
+      },
+      aborted: false,
+    }])
+    await client.close()
+  })
+
+  it('answers unavailable when no approval host callback is configured', async () => {
+    const dir = await tempDir('sdk-client-no-approval-')
+    const resultFile = join(dir, 'approval-result.jsonl')
+    const client = processClient(fakeLaunch({ FAKE_APPROVAL_RESULT_FILE: resultFile }))
+    cleanups.push(() => client.close())
+
+    await client.initialize({ cwd: dir, provider: 'fake', model: 'fake' })
+    await vi.waitFor(async () => {
+      expect(await readFile(resultFile, 'utf8')).toContain('unavailable')
+    })
+    await client.close()
+  })
+
   it('bounds profile initialization and names the selected profile in its diagnostic', async () => {
     const client = processClient(fakeLaunch(
       { FAKE_HANG_INIT: '1' },

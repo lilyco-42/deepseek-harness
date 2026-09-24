@@ -165,7 +165,7 @@ export function createProcessDeepSeekHarness(
   return new Constructor({
     ...runtime.cwd === undefined ? {} : { processCwd: runtime.cwd },
     ...options,
-  }, () => createProcessHarnessClient(runtime))
+  }, () => createProcessHarnessClient(runtime, options))
 }
 
 /** Per-run options: target session and streaming observer. */

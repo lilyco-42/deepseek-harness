@@ -6,6 +6,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-user-approval'
+import type { ApprovalOutcome, ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
 import { resolve } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -25,6 +27,8 @@ import type {
   SessionEventNotification,
   SessionPromptParams,
   SessionPromptResult,
+  SdkApprovalOutcome,
+  SdkApprovalRequestParams,
   SdkEncodedImageBlock,
   SubagentFinishedNotification,
   SubagentStartedNotification,
@@ -62,6 +66,21 @@ function subagentParentOf(carrier: Scoped<SubagentRuntime>): Agent {
 export interface HarnessSdkJsonRpcServerOptions {
   /** Report max-token termination as an accepted result instead of an infrastructure error. */
   maxTokensAsSuccess?: boolean
+}
+
+function isSdkApprovalOutcome(value: unknown): value is SdkApprovalOutcome {
+  switch (value) {
+    case 'allowed-once':
+    case 'rejected':
+    case 'cancelled':
+    case 'unavailable': return true
+    default: return false
+  }
+}
+
+function approvalOutcome(value: unknown): ApprovalOutcome {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || !('outcome' in value)) return 'unavailable'
+  return isSdkApprovalOutcome(value.outcome) ? value.outcome : 'unavailable'
 }
 
 function successStatus(reason: string, options: HarnessSdkJsonRpcServerOptions): 'ok' | 'error' {
@@ -129,6 +148,27 @@ export class HarnessSdkJsonRpcServer {
           : { lastAssistantMessage: [...info.lastAssistantMessage] }),
       }
       transport.notify('subagent.finished', payload)
+    }))
+    this.disposers.push(ctx.on('approval/request', async (request: ApprovalRequestEvent, next) => {
+      const sessionId = String(request.agent.session.id)
+      const record = this.sessions.get(sessionId)
+      // Only an exact SDK-owned root agent may ask its host. Other agents in
+      // this shared runtime remain available to their own composed answerers.
+      if (record?.handle.agent !== request.agent) return next()
+      const params: SdkApprovalRequestParams = {
+        sessionId,
+        toolName: request.toolName,
+        ...(request.callId === undefined ? {} : { callId: String(request.callId) }),
+        ...(request.reason === undefined ? {} : { reason: request.reason }),
+      }
+      // The request signal carries cancellation across JSON-RPC. The transport
+      // sends $/cancelRequest so a host can dismiss its pending UI as well.
+      try {
+        return approvalOutcome(await transport.request('approval/request', params, request.signal))
+      } catch {
+        // A missing/disconnected host must deny the requested escalation.
+        return request.signal?.aborted ? 'cancelled' : 'unavailable'
+      }
     }))
   }
 

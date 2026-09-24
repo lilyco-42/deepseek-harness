@@ -15,14 +15,20 @@ import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-test
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
+import { ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import SubagentRuntime, { type SubagentResult, type SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
 import type { JsonRpcTransportPeer } from '@deepseek-ai/dsh-sdk-protocol'
+import type { ApprovalOutcome, ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
 import { HarnessSdkJsonRpcServer } from '../src/index.ts'
 
 class FakeTransport implements JsonRpcTransportPeer {
   notifications: { method: string; params?: Record<string, unknown> }[] = []
+  requests: { method: string; params: object; signal?: AbortSignal }[] = []
+  requestHandler: ((method: string, params: object, signal?: AbortSignal) => Promise<unknown>) | undefined
 
-  async request(method: string, params: object): Promise<unknown> {
+  async request(method: string, params: object, signal?: AbortSignal): Promise<unknown> {
+    this.requests.push({ method, params, ...(signal === undefined ? {} : { signal }) })
+    if (this.requestHandler !== undefined) return this.requestHandler(method, params, signal)
     throw new Error(`the SDK server should not call host JSON-RPC method ${method} with ${JSON.stringify(params)}`)
   }
 
@@ -109,6 +115,64 @@ async function settleSubagent(
 }
 
 describe('HarnessSdkJsonRpcServer', () => {
+  it('relays one-shot approvals only for its exact SDK-owned agent and fails malformed answers closed', async () => {
+    const listeners = new Map<string, (...args: unknown[]) => unknown>()
+    const agent = {
+      id: SessionId('owned'),
+      session: { id: SessionId('owned') },
+      followup: vi.fn<Agent['followup']>(),
+    } as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const ctx = {
+      on: vi.fn((event: string, listener: (...args: unknown[]) => unknown) => {
+        listeners.set(event, listener)
+        return () => undefined
+      }),
+      agents: { create: vi.fn(async () => handle), get: () => agent },
+      get: () => undefined,
+    } as Context
+    const transport = new FakeTransport()
+    transport.requestHandler = async () => ({ outcome: 'allowed-once' })
+    const server = new HarnessSdkJsonRpcServer(ctx, transport)
+    Object.defineProperty(server, 'initialized', { value: true, writable: true })
+    await server.prompt({ sessionId: 'owned', contentBlocks: [{ type: 'text', text: 'start' }] })
+
+    const registered = listeners.get('approval/request')
+    expect(registered).toBeTypeOf('function')
+    const ask = registered as (this: Agent, request: ApprovalRequestEvent, next: () => Promise<ApprovalOutcome>) => Promise<ApprovalOutcome>
+    const request = {
+      agent,
+      toolName: 'bash',
+      callId: ToolCallId('tool-call-1'),
+      reason: 'The command needs workspace-write access.',
+      rawInput: { command: 'must not cross the approval boundary' },
+    } satisfies ApprovalRequestEvent & { rawInput: object }
+    const next = vi.fn(() => Promise.resolve<ApprovalOutcome>('unavailable'))
+    const foreignAgent = { id: SessionId('foreign'), session: { id: SessionId('foreign') } } as Agent
+
+    expect(await ask.call(agent, request, next)).toBe('allowed-once')
+    expect(next).not.toHaveBeenCalled()
+    expect(transport.requests).toEqual([{
+      method: 'approval/request',
+      params: {
+        sessionId: 'owned',
+        toolName: 'bash',
+        callId: 'tool-call-1',
+        reason: 'The command needs workspace-write access.',
+      },
+    }])
+
+    transport.requestHandler = async () => ({ outcome: 'allow-everything' })
+    expect(await ask.call(agent, request, next)).toBe('unavailable')
+    expect(await ask.call(foreignAgent, {
+      ...request,
+      agent: foreignAgent,
+    }, next)).toBe('unavailable')
+    expect(next).toHaveBeenCalledOnce()
+    expect(transport.requests).toHaveLength(2)
+    await server.shutdown()
+  })
+
   it('cancels and closes an SDK session, then reopens its durable history', async () => {
     const followup = vi.fn<Agent['followup']>()
     const cancel = vi.fn<Agent['cancel']>()

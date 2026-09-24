@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Event
 from typing import TypeAlias
 
 from pydantic import BaseModel
@@ -21,6 +22,7 @@ class IncomingRequest:
     id: str | int
     method: str
     payload: JsonObject
+    cancelled: Event = field(default_factory=Event)
 
 
 class ServerInfo(BaseModel):
