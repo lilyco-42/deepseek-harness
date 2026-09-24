@@ -1306,41 +1306,43 @@ describe('HarnessSdkJsonRpcServer', () => {
   })
 
   it('resolves a relative cwd before creating the session', async () => {
-    const create = vi.fn<(options: unknown) => Promise<AgentHandle>>()
-      .mockResolvedValue({ agent: {} as Agent, dispose: () => Promise.resolve() })
-    const resolveCallConfig = vi.fn(async (config: unknown) => config)
-    const ctx = {
-      on: vi.fn(() => () => undefined),
-      agents: { create, get: () => undefined },
-      get: (name: string) => name === 'llm'
-        ? { listProviders: () => [{ id: 'mock', name: 'Mock' }], resolveCallConfig }
-        : undefined,
-    } as unknown as Context
-    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
-      initialize(params: { cwd: string; provider: string; model: string; reasoningEffort?: string; maxTokens?: number }): Promise<unknown>
-      getOrCreateSession(sessionId: string): Promise<unknown>
-      shutdown(): Promise<Record<string, never>>
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-sdk-relative-cwd-'))
+    const ctx = await makeHarness(storageDir)
+    class ResolvingAdapter extends LlmAdapter {
+      override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({ provider, id: model, name: model })
+      }
+
+      async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {
+        throw new Error('the cwd test must not start model inference')
+      }
     }
+    const disposeAdapter = ctx.llm.registerAdapter(['mock'], new ResolvingAdapter())
+    const agent = { id: SessionId('relative-cwd'), followup: vi.fn(), cancel: vi.fn() } as Agent
+    const create = vi.spyOn(ctx.agents, 'create').mockResolvedValue({ agent, dispose: vi.fn() })
+    vi.spyOn(ctx.agents, 'get').mockReturnValue(agent)
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
 
-    await server.initialize({ cwd: '.', provider: 'mock', model: 'model', reasoningEffort: 'high', maxTokens: 123 })
-    await server.getOrCreateSession('relative')
+    try {
+      await server.initialize({ cwd: '.', provider: 'mock', model: 'model', reasoningEffort: 'high', maxTokens: 123 })
+      await server.prompt({ sessionId: 'relative', contentBlocks: [{ type: 'text', text: 'probe' }] })
 
-    expect(resolveCallConfig).toHaveBeenCalledWith({
-      provider: 'mock',
-      model: 'model',
-      reasoningEffort: ReasoningEffortId('high'),
-      maxTokens: 123,
-    })
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      meta: { cwd: process.cwd() },
-      agentOptions: {
-        provider: 'mock',
-        model: 'model',
-        reasoningEffort: ReasoningEffortId('high'),
-        maxTokens: 123,
-      },
-    }))
-    await server.shutdown()
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({
+        meta: { cwd: process.cwd() },
+        agentOptions: {
+          provider: 'mock',
+          model: 'model',
+          reasoningEffort: ReasoningEffortId('high'),
+          maxTokens: 123,
+        },
+      }))
+      expect(agent.followup).toHaveBeenCalledOnce()
+    } finally {
+      await server.shutdown()
+      disposeAdapter()
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
   })
 
   it('settles every teardown and aggregates multiple failures', async () => {
