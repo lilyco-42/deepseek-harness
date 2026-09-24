@@ -18,7 +18,7 @@ export LAIN42_API_KEY='<your-own-lain42-token>'
 dsh web --no-open --patch /path/to/cordis.patch.yml
 ```
 
-The optional `LAIN42_API_BASE_URL` overrides the default `https://api.lain42.top/v1` for controlled testing. Never put a token in the overlay, a URL, a browser page, or a shared server environment. Do not expose the local Web port to the internet.
+The route uses `https://api.lain42.top/v1`. For controlled testing against another endpoint, change `baseURL` in a private overlay rather than putting environment expressions into shipped configuration. Never put a token in the overlay, a URL, a browser page, or a shared server environment. Do not expose the local Web port to the internet.
 
 ## Acceptance before replacing the existing site Agent
 

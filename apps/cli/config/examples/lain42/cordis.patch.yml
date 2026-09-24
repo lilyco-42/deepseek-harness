@@ -12,7 +12,7 @@
       lain42:
         displayName: Lain42
         api: openai-completions
-        baseURL: !!js process.env.LAIN42_API_BASE_URL || 'https://api.lain42.top/v1'
+        baseURL: https://api.lain42.top/v1
         apiKeyEnv: LAIN42_API_KEY
         models:
           - id: !!js process.env.LAIN42_MODEL

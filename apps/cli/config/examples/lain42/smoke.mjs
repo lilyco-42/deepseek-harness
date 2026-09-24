@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -42,15 +42,22 @@ try {
   await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('mock gateway did not bind')
+  const overlayContents = await readFile(overlay, 'utf8')
+  const smokeOverlayContents = overlayContents.replace(
+    '        baseURL: https://api.lain42.top/v1',
+    `        baseURL: http://127.0.0.1:${address.port}/v1`,
+  )
+  if (smokeOverlayContents === overlayContents) throw new Error('could not prepare the mock gateway overlay')
+  const smokeOverlay = join(home, 'lain42-smoke.patch.yml')
+  await writeFile(smokeOverlay, smokeOverlayContents)
   const output = await new Promise((resolveRun, rejectRun) => {
-    const child = spawn('pnpm', ['dsh', '--profile', 'headless', '--patch', overlay, 'Reply with the test result.'], {
+    const child = spawn('pnpm', ['dsh', '--profile', 'headless', '--patch', smokeOverlay, 'Reply with the test result.'], {
       cwd: root,
       env: {
         ...process.env,
         DSH_HOME: home,
         LAIN42_MODEL: model,
         LAIN42_API_KEY: key,
-        LAIN42_API_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
         DSH_TELEMETRY_MODE: 'DISABLED',
       },
     })

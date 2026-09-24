@@ -18,7 +18,7 @@ export LAIN42_API_KEY='<your-own-lain42-token>'
 dsh web --no-open --patch /path/to/cordis.patch.yml
 ```
 
-可选的 `LAIN42_API_BASE_URL` 可以覆盖默认值 `https://api.lain42.top/v1`，用于受控测试。不要把 token 写进 overlay、URL、浏览器页面或共享服务器环境。不要将本地 Web 端口暴露到互联网。
+该路由固定使用 `https://api.lain42.top/v1`。如需对其他地址进行受控测试，请在私有 overlay 中修改 `baseURL`，不要在发布配置里嵌入环境表达式。不要把 token 写进 overlay、URL、浏览器页面或共享服务器环境。不要将本地 Web 端口暴露到互联网。
 
 ## 替换现有网站 Agent 前的验收标准
 
