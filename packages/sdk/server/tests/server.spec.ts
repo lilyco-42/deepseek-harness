@@ -189,6 +189,7 @@ describe('HarnessSdkJsonRpcServer', () => {
       await expect(server.handleRequest('session/close', undefined))
         .rejects.toThrow('session/close params.sessionId must be a non-empty string')
       await server.prompt({ sessionId: 'owned-session', contentBlocks: [{ type: 'text', text: 'start' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
 
       await expect(server.handleRequest('session/cancel', { sessionId: 'owned-session' })).resolves.toEqual({})
       await expect(server.handleRequest('session/close', { sessionId: 'owned-session' })).resolves.toEqual({})
@@ -1284,6 +1285,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     try {
       await server.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'dsagent-model' })
       await server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'first' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
       const closing = server.closeSession({ sessionId: 'serialized-close' })
       await disposeStarted.promise
       const reopening = server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'second' }] })
@@ -1310,7 +1312,9 @@ describe('HarnessSdkJsonRpcServer', () => {
     const ctx = {
       on: vi.fn(() => () => undefined),
       agents: { create, get: () => undefined },
-      get: () => ({ listProviders: () => [{ id: 'mock', name: 'Mock' }], resolveCallConfig }),
+      get: (name: string) => name === 'llm'
+        ? { listProviders: () => [{ id: 'mock', name: 'Mock' }], resolveCallConfig }
+        : undefined,
     } as unknown as Context
     const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
       initialize(params: { cwd: string; provider: string; model: string; reasoningEffort?: string; maxTokens?: number }): Promise<unknown>
