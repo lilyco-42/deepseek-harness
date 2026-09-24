@@ -911,7 +911,7 @@ test('keeps trusted preflight before token minting and required policy unconditi
   assert.ok(steps[2].includes('permission-organization-projects: read'))
   assert.ok(steps[3].includes('PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}'))
   assert.ok(steps[3].includes('run: node .github/issue-management/policy.mjs pr'))
-  assert.ok(steps[3].includes("if: ${{ steps.preflight.outputs.legacy-automated != 'true' }}"))
+  assert.ok(steps[3].includes("if: ${{ steps.preflight.outputs.legacy-exempt != 'true' }}"))
 })
 
 test('runs trusted rollout selection with absent and present capability markers', { skip: process.platform === 'win32' ? 'The policy workflow executes under hosted Ubuntu bash' : false }, (t) => {
@@ -922,10 +922,10 @@ test('runs trusted rollout selection with absent and present capability markers'
     .split('\n').map((line) => line.slice(10)).join('\n')
   assert.deepEqual(JSON.parse(readFileSync(new URL('./selective-preflight.json', import.meta.url), 'utf8')), { version: 1 })
   const cases = [
-    { name: 'legacy human draft', type: 'User', draft: true, marker: false, expected: 'legacy-automated=false\nneeds-project=true\n' },
-    { name: 'legacy human ready', type: 'User', draft: false, marker: false, expected: 'legacy-automated=false\nneeds-project=true\n' },
-    { name: 'legacy bot', type: 'Bot', marker: false, expected: 'legacy-automated=true\nneeds-project=false\n' },
-    { name: 'legacy app', type: 'App', marker: false, expected: 'legacy-automated=true\nneeds-project=false\n' },
+    { name: 'legacy human draft', type: 'User', draft: true, marker: false, expected: 'legacy-exempt=true\nneeds-project=false\n' },
+    { name: 'legacy human ready', type: 'User', draft: false, marker: false, expected: 'legacy-exempt=false\nneeds-project=true\n' },
+    { name: 'legacy bot', type: 'Bot', marker: false, expected: 'legacy-exempt=true\nneeds-project=false\n' },
+    { name: 'legacy app', type: 'App', marker: false, expected: 'legacy-exempt=true\nneeds-project=false\n' },
     { name: 'modern exempt', type: 'Bot', marker: true, expected: 'exempt=true\nneeds-project=false\n' },
     { name: 'modern failure', type: 'User', marker: true, failure: true, expected: '' },
   ]

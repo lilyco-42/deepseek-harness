@@ -34,8 +34,9 @@ jobs:
           import fs from 'node:fs'
           const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
           const automated = ['Bot', 'App'].includes(event.pull_request.user.type)
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `legacy-automated=${automated}\nneeds-project=${!automated}\n`)
-          console.log('Trusted policy has no selective preflight; preserving legacy policy enforcement.')
+          const exempt = automated || event.pull_request.draft === true
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `legacy-exempt=${exempt}\nneeds-project=${!exempt}\n`)
+          console.log('Trusted policy has no selective preflight; preserving legacy policy enforcement and draft exemptions.')
           NODE
           fi
       - name: Create Project read token
@@ -51,7 +52,7 @@ jobs:
           permission-organization-projects: read
       # Re-read current state even after an exempt preflight; never replace a failure with an edit skip.
       - name: Validate pull request
-        if: ${{ steps.preflight.outputs.legacy-automated != 'true' }}
+        if: ${{ steps.preflight.outputs.legacy-exempt != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}
