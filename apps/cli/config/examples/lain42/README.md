@@ -1,5 +1,7 @@
 # Lain42 Agent: revised delivery goal
 
+English | [中文](README.zh.md)
+
 Use DeepSeek Harness as the Agent runtime, with Lain42 as its default model gateway. A user can chat from a phone or browser and invoke tools on **that user's own** paired headless node. The owner's Radxa A7A is private and must never be the shared execution host for other users.
 
 This is an opt-in first slice, not a public deployment. The upstream `dsh web` surface is a local, process-token-authenticated single-user application. Public multi-user access requires a separate Lain42 control plane that authenticates each user, maps each session to exactly one owned device, forwards only authorized Agent events, and never exposes the device's local Web port or credentials.
