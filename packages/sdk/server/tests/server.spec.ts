@@ -1310,7 +1310,12 @@ describe('HarnessSdkJsonRpcServer', () => {
     const ctx = await makeHarness(storageDir)
     class ResolvingAdapter extends LlmAdapter {
       override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-        return Promise.resolve({ provider, id: model, name: model })
+        return Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          reasoning: { efforts: [{ id: ReasoningEffortId('high'), name: 'High' }] },
+        })
       }
 
       async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {
