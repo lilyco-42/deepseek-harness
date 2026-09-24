@@ -243,14 +243,14 @@ describe('DeepSeekHarness', () => {
   it('cancels a running session without closing the runtime', async () => {
     const harness = harnessWith({ FAKE_HANG_PROMPT: '1' })
     const session = harness.session('cancel-me')
-    const receipt = Promise.withResolvers<void>()
+    const receipt = Promise.withResolvers<undefined>()
     const running = session.run('wait for cancellation', {
       onNotification: (notification) => {
         const event = notification.params.event
         if (notification.method === 'session.event'
           && notification.params.sessionId === session.id
           && typeof event === 'object' && event !== null && 'type' in event
-          && event.type === 'agent/inbox/spliced') receipt.resolve()
+          && event.type === 'agent/inbox/spliced') receipt.resolve(undefined)
       },
     })
 

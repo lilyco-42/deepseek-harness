@@ -204,7 +204,7 @@ describe('Python SDK dsh profile keyless smoke', () => {
   it('cancels a running turn and reopens durable history after session close', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdk-session-lifecycle-'))
     const modelRequests: Record<string, unknown>[] = []
-    const secondModelRequest = Promise.withResolvers<void>()
+    const secondModelRequest = Promise.withResolvers<undefined>()
     const modelServer = createServer((request, response) => {
       let body = ''
       request.setEncoding('utf8')
@@ -215,7 +215,7 @@ describe('Python SDK dsh profile keyless smoke', () => {
         response.writeHead(200, { 'content-type': 'text/event-stream' })
         if (JSON.stringify(payload).includes('cancel this pending turn')) {
           response.flushHeaders()
-          secondModelRequest.resolve()
+          secondModelRequest.resolve(undefined)
           return
         }
         response.end(messagesResponse({ type: 'text', text: 'done' }, 'end_turn'))

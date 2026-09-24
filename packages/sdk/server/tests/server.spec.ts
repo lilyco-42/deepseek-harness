@@ -1225,7 +1225,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
     vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
     const ctx = await makeHarness(storageDir)
-    const creation = Promise.withResolvers<void>()
+    const creation = Promise.withResolvers<undefined>()
     const createAgent = ctx.agents.create.bind(ctx.agents)
     const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async (options) => {
       await creation.promise
@@ -1237,12 +1237,12 @@ describe('HarnessSdkJsonRpcServer', () => {
       const prompt = server.prompt({ sessionId: 'close-race', contentBlocks: [{ type: 'text', text: 'start' }] })
       await vi.waitFor(() => { expect(create).toHaveBeenCalledOnce() })
       const closing = server.closeSession({ sessionId: 'close-race' })
-      creation.resolve()
+      creation.resolve(undefined)
 
       await expect(prompt).rejects.toThrow('SDK session is not open: close-race')
       await expect(closing).resolves.toEqual({})
     } finally {
-      creation.resolve()
+      creation.resolve(undefined)
       await server.shutdown()
       await ctx.fiber.dispose()
       await rm(storageDir, { recursive: true, force: true })
@@ -1255,8 +1255,8 @@ describe('HarnessSdkJsonRpcServer', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
     vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
     const ctx = await makeHarness(storageDir)
-    const disposeStarted = Promise.withResolvers<void>()
-    const finishDispose = Promise.withResolvers<void>()
+    const disposeStarted = Promise.withResolvers<undefined>()
+    const finishDispose = Promise.withResolvers<undefined>()
     let first = true
     const createAgent = ctx.agents.create.bind(ctx.agents)
     const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async (options) => {
@@ -1266,7 +1266,7 @@ describe('HarnessSdkJsonRpcServer', () => {
         dispose: async () => {
           if (first) {
             first = false
-            disposeStarted.resolve()
+            disposeStarted.resolve(undefined)
             await finishDispose.promise
           }
           await handle.dispose()
@@ -1282,12 +1282,12 @@ describe('HarnessSdkJsonRpcServer', () => {
       const reopening = server.prompt({ sessionId: 'serialized-close', contentBlocks: [{ type: 'text', text: 'second' }] })
       expect(create).toHaveBeenCalledOnce()
 
-      finishDispose.resolve()
+      finishDispose.resolve(undefined)
       await closing
       await reopening
       expect(create).toHaveBeenCalledTimes(2)
     } finally {
-      finishDispose.resolve()
+      finishDispose.resolve(undefined)
       await server.shutdown()
       await ctx.fiber.dispose()
       await rm(storageDir, { recursive: true, force: true })
