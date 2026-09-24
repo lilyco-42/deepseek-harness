@@ -891,7 +891,7 @@ test('performs no lifecycle requests for removed signals or title-only edits', a
   assert.deepEqual(fixture.requests, [])
 })
 
-test('keeps trusted preflight before token minting and required policy unconditional', () => {
+test('keeps trusted preflight repository-scoped before token minting', () => {
   const source = readFileSync(new URL('../workflows/issue-policy.yml', import.meta.url), 'utf8')
   const job = source.slice(source.indexOf('  policy:'))
   assert.ok(job.includes('    name: Issue policy'))
@@ -908,7 +908,8 @@ test('keeps trusted preflight before token minting and required policy unconditi
   assert.ok(steps[2].includes('GITHUB_TOKEN: ${{ github.token }}'))
   assert.ok(steps[2].includes('node .github/issue-management/policy.mjs pr-preflight'))
   assert.ok(steps[2].includes('if [ -f .github/issue-management/selective-preflight.json ]; then'))
-  assert.doesNotMatch(steps[2], /secrets\.|PROJECT_TOKEN|if:/)
+  assert.ok(steps[2].includes("if: ${{ github.repository == 'deepseek-harness/deepseek-harness' }}"))
+  assert.doesNotMatch(steps[2], /secrets\.|PROJECT_TOKEN/)
   assert.ok(steps[3].includes("github.repository == 'deepseek-harness/deepseek-harness' && steps.preflight.outputs.needs-project == 'true'"))
   assert.ok(steps[3].includes('permission-organization-projects: read'))
   assert.ok(steps[4].includes('PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}'))
