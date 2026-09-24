@@ -140,10 +140,11 @@ describe('HarnessSdkJsonRpcServer', () => {
         reason: 'The command needs workspace-write access.',
       }
       const next = vi.fn(() => Promise.resolve<ApprovalOutcome>('unavailable'))
-      const outcome = await ctx.waterfall('approval/request', {
+      const requestWithRawInput: ApprovalRequestEvent & { rawInput: object } = {
         ...request,
         rawInput: { command: 'must not cross the approval boundary' },
-      }, next)
+      }
+      const outcome = await ctx.waterfall('approval/request', requestWithRawInput, next)
 
       expect(outcome).toBe('allowed-once')
       expect(next).not.toHaveBeenCalled()
