@@ -88,6 +88,14 @@ function successStatus(reason: string, options: HarnessSdkJsonRpcServerOptions):
   return reason === 'max-tokens' && options.maxTokensAsSuccess === true ? 'ok' : 'error'
 }
 
+function sessionIdParam(params: Record<string, unknown> | undefined, method: string): string {
+  const sessionId = params?.sessionId
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    throw new TypeError(`${method} params.sessionId must be a non-empty string`)
+  }
+  return sessionId
+}
+
 /**
  * SDK server over one booted harness context and transport peer. Construction
  * subscribes to session, agent, and subagent lifecycle events until shutdown;
@@ -354,9 +362,9 @@ export class HarnessSdkJsonRpcServer {
       case 'session/prompt':
         return this.prompt(params as unknown as SessionPromptParams)
       case 'session/cancel':
-        return this.cancel(params as unknown as SessionCancelParams)
+        return this.cancel({ sessionId: sessionIdParam(params, 'session/cancel') })
       case 'session/close':
-        return this.closeSession(params as unknown as SessionCloseParams)
+        return this.closeSession({ sessionId: sessionIdParam(params, 'session/close') })
       case 'shutdown':
         return this.shutdown()
       default:
