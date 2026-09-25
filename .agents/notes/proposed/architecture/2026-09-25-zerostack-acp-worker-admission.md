@@ -16,11 +16,11 @@ The candidate profile is `--no-default-features --features acp`. GitHub Actions 
 
 | Runner | Default average / peak | Lean average / peak | ACP-only average / peak |
 |---|---:|---:|---:|
-| Linux ARM64 | 25,093 / 25,176 KiB | 22,425 / 22,504 KiB | 21,326 / 21,400 KiB |
-| Linux x64 | 25,955 / 26,068 KiB | 25,742 / 25,828 KiB | 23,548 / 23,636 KiB |
-| Windows x64 | 14,432 / 14,432 KiB | 14,332 / 14,332 KiB | 14,032 / 14,032 KiB |
+| Linux ARM64 | 25,102 / 25,184 KiB | 22,425 / 22,504 KiB | 21,330 / 21,404 KiB |
+| Linux x64 | 25,959 / 26,072 KiB | 25,764 / 25,896 KiB | 23,581 / 23,672 KiB |
+| Windows x64 | 14,460 / 14,460 KiB | 14,332 / 14,332 KiB | 14,036 / 14,036 KiB |
 
-These measurements make ACP-only a useful lean profile, with the clearest reduction on ARM64. They measure the worker after session creation, not the total DSH application, active inference, CPU load, or a production task; they are not evidence of end-to-end savings versus DSH. All nine build-and-smoke jobs passed in [GitHub Actions run 36103765718](https://github.com/lilyco-42/deepseek-harness/actions/runs/36103765718). Its source audit still reports ACP Ask auto-approval and blocks remote writes.
+These measurements make ACP-only a useful lean profile, with the clearest reduction on ARM64. They measure the worker after session creation, not the total DSH application, active inference, CPU load, or a production task; they are not evidence of end-to-end savings versus DSH. All nine build-and-smoke jobs passed in [GitHub Actions run 36112963016](https://github.com/lilyco-42/deepseek-harness/actions/runs/36112963016). Its source audit still reports ACP Ask auto-approval and blocks remote writes.
 
 ZeroStack's custom OpenAI provider accepts a configured base URL and an API-key environment variable; custom base URLs default to Chat Completions ([provider configuration](https://github.com/gi-dellav/zerostack/blob/main/docs/CONFIG.md#openai-api-styles-and-custom-headers)). This makes an OpenAI-compatible Lain42 `/v1` endpoint a plausible per-user model route, but this run did not make an inference request. Before advertising it as connected, add a GitHub Actions mock-gateway smoke for `/models`, streaming `/chat/completions`, and authentication using a synthetic test key; then verify one user-issued scoped key against the real gateway outside CI. Keep that key on the user's own node, never in the shared server config or browser bundle.
 

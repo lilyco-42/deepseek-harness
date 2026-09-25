@@ -16,11 +16,11 @@ DeepSeek Harness（DSH）继续作为 Web 与移动端产品运行时，负责�
 
 | 运行平台 | 默认配置平均／峰值 | 精简配置平均／峰值 | 仅 ACP 平均／峰值 |
 |---|---:|---:|---:|
-| Linux ARM64 | 25,093 / 25,176 KiB | 22,425 / 22,504 KiB | 21,326 / 21,400 KiB |
-| Linux x64 | 25,955 / 26,068 KiB | 25,742 / 25,828 KiB | 23,548 / 23,636 KiB |
-| Windows x64 | 14,432 / 14,432 KiB | 14,332 / 14,332 KiB | 14,032 / 14,032 KiB |
+| Linux ARM64 | 25,102 / 25,184 KiB | 22,425 / 22,504 KiB | 21,330 / 21,404 KiB |
+| Linux x64 | 25,959 / 26,072 KiB | 25,764 / 25,896 KiB | 23,581 / 23,672 KiB |
+| Windows x64 | 14,460 / 14,460 KiB | 14,332 / 14,332 KiB | 14,036 / 14,036 KiB |
 
-这些数据表明仅 ACP 配置是一个可行的精简版本，ARM64 上的降幅最明显。测量对象是创建会话后的 worker，不包括完整 DSH 应用、活跃推理、CPU 负载或生产任务；也不能证明相对 DSH 的端到端内存节省。[GitHub Actions run 36103765718](https://github.com/lilyco-42/deepseek-harness/actions/runs/36103765718) 的 9 个构建和冒烟任务全部通过，源码审计仍检测到 ACP 自动批准 Ask，并阻止远程写入。
+这些数据表明仅 ACP 配置是一个可行的精简版本，ARM64 上的降幅最明显。测量对象是创建会话后的 worker，不包括完整 DSH 应用、活跃推理、CPU 负载或生产任务；也不能证明相对 DSH 的端到端内存节省。[GitHub Actions run 36112963016](https://github.com/lilyco-42/deepseek-harness/actions/runs/36112963016) 的 9 个构建和冒烟任务全部通过，源码审计仍检测到 ACP 自动批准 Ask，并阻止远程写入。
 
 ZeroStack 的自定义 OpenAI provider 支持配置 base URL，并从环境变量读取 API key；自定义 base URL 默认使用 Chat Completions（[provider 配置](https://github.com/gi-dellav/zerostack/blob/main/docs/CONFIG.md#openai-api-styles-and-custom-headers)）。因此 OpenAI 兼容的 Lain42 `/v1` 有望作为每个用户自己的模型路由，但本轮 CI 没有实际请求模型。在对外宣称已接通前，应先用合成测试 key 在 GitHub Actions 增加 mock gateway 冒烟，覆盖 `/models`、流式 `/chat/completions` 和认证；之后再在 CI 以外，用某位用户自行签发的受限 key 验证真实网关。该 key 只应保存在用户自己的节点，不应放进共享服务器配置或浏览器包。
 
