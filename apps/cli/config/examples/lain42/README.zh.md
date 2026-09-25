@@ -8,7 +8,7 @@
 
 ## 当前第一阶段
 
-`cordis.patch.yml` 通过官方 `llm-pi-ai` 适配器，将默认模型路由到现有的 OpenAI 兼容 Lain42 API。模型 id 和 API key 来自节点所有者的环境变量，不会提交到仓库。该配置会禁用官方 DeepSeek 模型与搜索适配器，以及内置的 session-log 和 telemetry 导出。公开 URL 抓取仍可用。搜索需要另行配置提供方，因此此阶段**尚未就绪**。
+`cordis.patch.yml` 通过官方 `llm-pi-ai` 适配器，将默认模型路由到现有的 OpenAI 兼容 Lain42 API。模型 id 和 API key 来自节点所有者的环境变量，不会提交到仓库。该配置会禁用官方 DeepSeek 模型与搜索适配器，以及内置的 session-log 和 telemetry 导出。公开 URL 抓取仍可用。搜索需要另行配置提供方，因此此阶段**尚未就绪**。Actions smoke 使用模拟网关和代理提供的测试页面，验证抓取正文会进入下一次模型请求；它不验证真实 Lain42 网关是否可用或回答质量。
 
 在安装了 `dsh` 且所选模型 id 存在于该用户 Lain42 账户的私有节点上：
 
