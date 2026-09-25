@@ -16,6 +16,8 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -143,6 +145,30 @@ class MockGateway:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+
+
+def verify_mock_model_list(gateway: MockGateway) -> None:
+    authorized = Request(
+        f"{gateway.base_url}/models",
+        headers={"Authorization": f"Bearer {MOCK_API_KEY}"},
+    )
+    with urlopen(authorized, timeout=5) as response:
+        payload = json.loads(response.read())
+    model_ids = [item.get("id") for item in payload.get("data", [])]
+    if MOCK_MODEL not in model_ids:
+        raise RuntimeError("The mock gateway model-list endpoint omitted the selected model")
+
+    unauthorized = Request(f"{gateway.base_url}/models")
+    try:
+        with urlopen(unauthorized, timeout=5):
+            raise RuntimeError("The mock gateway accepted a model-list request without a key")
+    except HTTPError as error:
+        if error.code != 401:
+            raise RuntimeError("The mock gateway rejected an unauthenticated request incorrectly") from error
+    if len(gateway.model_requests) != 2 or gateway.model_requests[0]["authorized"] is not True:
+        raise RuntimeError("The mock gateway model-list authentication checks were not recorded")
+    if gateway.model_requests[1]["authorized"] is not False:
+        raise RuntimeError("The mock gateway did not reject the missing API key")
 
 
 def read_stdout(process: subprocess.Popen[str], lines: queue.Queue[str | None]) -> None:
@@ -273,6 +299,7 @@ def main() -> None:
     gateway = MockGateway()
     gateway.start()
     try:
+        verify_mock_model_list(gateway)
         with tempfile.TemporaryDirectory(prefix="zerostack-acp-smoke-") as root:
             workspace = Path(root) / "workspace"
             config_dir = Path(root) / "config"
@@ -367,10 +394,6 @@ def main() -> None:
                 )
                 if MOCK_REPLY not in response_text:
                     raise RuntimeError("ACP did not stream the mock gateway reply")
-                if not gateway.model_requests or not all(
-                    item["authorized"] for item in gateway.model_requests
-                ):
-                    raise RuntimeError("The mock gateway did not receive an authorized model-list request")
                 if not gateway.chat_requests or not all(
                     item["authorized"] for item in gateway.chat_requests
                 ):
@@ -405,7 +428,7 @@ def main() -> None:
                     f"- Pinned upstream revision: `{UPSTREAM_REVISION}`\n"
                     f"- Cargo profile: `{PROFILE}`\n"
                     "- ACP initialize + session/new + session/prompt: passed\n"
-                    "- Synthetic gateway model listing + bearer auth + streamed reply: passed\n"
+                    "- Gateway model list + missing-key rejection + ZeroStack bearer-auth streaming: passed\n"
                     f"- ACP permission posture: **{permission_posture}**\n"
                     f"- ACP read-only configuration: {read_only_posture}\n"
                     f"- ACP workspace selection: {workspace_posture}\n"
