@@ -48,6 +48,8 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 The `ask` policy uses the composed `dsh-user-approval` service to show the request in the parent session. If the service, an answerer, or an ACP `allow_once` option is unavailable, the child request is cancelled.
 
+This is not a sandbox: the parent can mediate only permission requests the ACP child sends. It cannot restrict a child that runs tools without asking.
+
 A DeepSeek Harness child uses the product launcher and an explicit absolute `DSH_HOME`. The isolated home prevents a nested runtime from discovering the launching person's profiles or credentials; the generic ACP provider does not impose this requirement on non-DSH agents.
 
 ```yaml

@@ -104,21 +104,6 @@ jobs:
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
 
-      - name: Export regenerated catalogs for the author
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/generated-catalogs"
-          trap 'git restore -- docs/config-catalog.md' EXIT
-          pnpm run gen-config-catalog
-          cp docs/config-catalog.md "$RUNNER_TEMP/generated-catalogs/"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: generated-catalogs
-          path: ${{ runner.temp }}/generated-catalogs/*.md
-          if-no-files-found: ignore
-
       - name: Run static gates
         env:
           DSH_ARCHIVE_BASE_REF: ${{ github.event.pull_request.base.sha }}

@@ -48,6 +48,8 @@ kind: "package-reference"
 
 `ask` 策略通过组合的 `dsh-user-approval` 服务在父会话显示请求。如果审批服务、回答器或 ACP `allow_once` 选项不可用，子请求会被取消。
 
+这不是沙箱：父级只能处理 ACP 子进程主动发送的权限请求，无法限制未先询问就直接运行工具的子进程。
+
 DeepSeek Harness 子进程使用产品启动器和一个显式的绝对路径 `DSH_HOME`。隔离的 home 可防止嵌套运行时发现启动者个人的 profile 或凭据；通用 ACP 提供方不会把这一要求强加给非 DSH agent。
 
 ```yaml
