@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-09-25-zerostack-acp-worker-admission.md
 2026-09-25-zerostack-acp-worker-admission.md: 05bd3eaaca36630d8907373a5b389f9bd2dfb812
-2026-09-25-zerostack-acp-worker-admission.zh.md: d01365e4851c7d64342d757c733569af54afb472
+2026-09-25-zerostack-acp-worker-admission.zh.md: 8063474ba9dee1b476d2200f0c0b4a760cb8c622
