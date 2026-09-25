@@ -8,7 +8,7 @@ This is an opt-in first slice, not a public deployment. The upstream `dsh web` s
 
 ## Current first slice
 
-`cordis.patch.yml` routes the default model through the existing OpenAI-compatible Lain42 API using the official `llm-pi-ai` adapter. The model id and API key come from the node owner's environment; no credential is committed. It disables the official DeepSeek model and search adapters and the stock session-log/telemetry exports. Public URL fetch remains available. Search needs an independently configured provider and is **not ready** in this slice. The Actions smoke uses a mock gateway and proxy-served fixture page to verify that fetched text reaches the next model request; it does not verify live Lain42 availability or answer quality.
+`cordis.patch.yml` routes the default model through the existing OpenAI-compatible Lain42 API using the official `llm-pi-ai` adapter. The model id and API key come from the node owner's environment; no credential is committed. It disables the official DeepSeek model and search adapters and the stock session-log/telemetry exports. Public URL fetch remains available. Search needs an independently configured provider and is **not ready** in this slice. The Actions smoke uses a mock gateway and proxy-served fixture page to verify that a model request following the fetch tool receives the page text; it does not verify live Lain42 availability or answer quality.
 
 On a private node with `dsh` installed and a model id that exists in that user's Lain42 account:
 

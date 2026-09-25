@@ -11,6 +11,7 @@ const sourceFact = 'LANTERN_COLOR=VIOLET_7319'
 const task = `Fetch ${sourceUrl} and report the unique fact stated on that page.`
 const llmRequests = []
 const proxiedRequests = []
+const followUpEvidence = []
 
 const server = createServer(async (request, response) => {
   if (request.url !== '/v1/chat/completions' || request.method !== 'POST') {
@@ -51,15 +52,23 @@ const server = createServer(async (request, response) => {
     response.writeHead(400).end('the agent exceeded the smoke request limit')
     return
   }
-  if (llmRequests.length === 2) {
-    const followUp = JSON.stringify(payload.messages)
-    server.sourceReachedModel = followUp.includes(sourceFact)
-  }
+  const messages = Array.isArray(payload.messages) ? payload.messages : []
+  const fetchedResult = messages.some(message => message.role === 'tool'
+    && JSON.stringify(message.content).includes(sourceFact))
+  followUpEvidence.push({
+    roles: messages.map(message => message.role),
+    fetchedResult,
+    tail: messages.slice(-3).map(message => ({
+      role: message.role,
+      toolCallId: message.tool_call_id,
+      content: (typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).slice(-180),
+    })),
+  })
+  if (fetchedResult) server.sourceReachedModel = true
   writeStream(response, [
-    // Later turns can be part of the Harness' normal response lifecycle. Keep
-    // the fixture deterministic; the assertion below independently proves the
-    // first post-fetch model request received the page content.
-    { delta: { role: 'assistant', content: sourceFact } },
+    // A request is only allowed to echo the fixture fact after the real web
+    // tool result appears in its model-facing message history.
+    { delta: { role: 'assistant', content: fetchedResult ? sourceFact : 'SMOKE_FETCH_RESULT_NOT_IN_CONTEXT' } },
     { delta: {}, finish_reason: 'stop' },
   ])
 })
@@ -113,7 +122,8 @@ try {
   })
 
   if (llmRequests.length < 2 || !server.sourceReachedModel || !output.includes(sourceFact)) {
-    throw new Error(`the fetched page content did not reach the first follow-up model request (requests=${llmRequests.length}, received=${server.sourceReachedModel === true})`)
+    const evidence = JSON.stringify(followUpEvidence).slice(-1400)
+    throw new Error(`the fetched page content did not reach a model request after the web tool result (requests=${llmRequests.length}, fetches=${proxiedRequests.length}, received=${server.sourceReachedModel === true}, followups=${evidence})`)
   }
   if (proxiedRequests.length !== 1 || proxiedRequests[0] !== sourceUrl) {
     throw new Error(`the supplied URL was not fetched exactly once through the fixture proxy: ${proxiedRequests.join(', ')}`)
