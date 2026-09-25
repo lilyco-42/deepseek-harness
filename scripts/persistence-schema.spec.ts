@@ -316,8 +316,9 @@ interface SessionEventMap {
     expect(() => extractPersistenceSchema(fixture(source))).toThrow(error)
   })
 
-  // Repository-wide TypeScript extraction and reachable-node hashing use the Windows coverage test budget.
-  it('includes every real repository event and fingerprints every reachable node', { timeout: 90_000 }, () => {
+  // This compiles and fingerprints the complete repository graph. Under Windows coverage instrumentation it
+  // can take longer than the ordinary test budget, while still completing normally.
+  it('includes every real repository event and fingerprints every reachable node', { timeout: 180_000 }, () => {
     const root = resolve(import.meta.dirname, '..')
     const model = extractPersistenceSchema(root)
     expect(model.roots.filter(root => root.kind === 'event').map(root => root.event).sort())
