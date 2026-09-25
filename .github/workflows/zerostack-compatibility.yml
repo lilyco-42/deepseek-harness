@@ -40,6 +40,15 @@ jobs:
           - platform: windows-x64
             runner: windows-latest
             profile: lean
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            profile: acp-only
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            profile: acp-only
+          - platform: windows-x64
+            runner: windows-latest
+            profile: acp-only
     steps:
       - uses: actions/checkout@v6
         with:
@@ -73,6 +82,11 @@ jobs:
         if: matrix.profile == 'lean'
         working-directory: zerostack
         run: cargo build --locked --release --no-default-features --features acp,mcp,archmd
+
+      - name: Build minimal ACP-only ZeroStack binary
+        if: matrix.profile == 'acp-only'
+        working-directory: zerostack
+        run: cargo build --locked --release --no-default-features --features acp
 
       - name: Start ACP, create a session, and record resident memory
         env:
