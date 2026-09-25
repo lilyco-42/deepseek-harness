@@ -111,8 +111,12 @@ def acp_permission_posture() -> str:
     if start < 0 or end < 0:
         return "NOT VERIFIED (permission implementation shape changed)"
     permission_implementation = source[start:end]
-    if "UserDecision::AllowOnce" in permission_implementation:
-        return "FAIL: ACP automatically approves Ask permissions"
+    auto_approves_ask = (
+        "Auto-approve Ask requests" in permission_implementation
+        and "UserDecision::AllowOnce" in permission_implementation
+    )
+    if auto_approves_ask:
+        return "VERIFIED UNSAFE: ACP automatically approves Ask permissions"
     return "NOT VERIFIED (requires review of the changed permission implementation)"
 
 
@@ -197,6 +201,16 @@ def main() -> None:
             permission_posture = acp_permission_posture()
             read_only_posture = acp_read_only_posture()
             workspace_posture = acp_workspace_posture()
+            unverified_postures = [
+                posture
+                for posture in (permission_posture, read_only_posture, workspace_posture)
+                if posture.startswith("NOT VERIFIED")
+            ]
+            if unverified_postures:
+                raise RuntimeError(
+                    "ZeroStack ACP security source changed and requires review: "
+                    + "; ".join(unverified_postures)
+                )
             machine = os.uname().machine if hasattr(os, "uname") else "windows"
             summary = (
                 f"### ZeroStack ACP smoke: {sys.platform} / {machine}\n\n"
