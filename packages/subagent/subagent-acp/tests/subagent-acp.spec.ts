@@ -10,7 +10,7 @@ import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
 import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
 import * as acp from '../src/index.ts'
@@ -34,7 +34,7 @@ const mockServer = fileURLToPath(new URL('./mock-acp-server.ts', import.meta.url
 const parentId = SessionId('parent')
 const parentSession = Session.create(
   parentId,
-  [{ type: 'turn/start', data: { turn: 1 } }],
+  [{ type: 'turn/start', seq: SessionSeq(0), time: Date.now(), data: { turn: 1 } }],
   { ...Session.create(parentId).header, cwd: process.cwd() },
 )
 const fakeInbox: Inbox = {
