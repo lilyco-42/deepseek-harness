@@ -9,6 +9,7 @@
 
 import { accessSync, constants, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
+import type { ToolKind } from '@agentclientprotocol/sdk'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import z from '@deepseek-ai/schemastery'
@@ -176,8 +177,9 @@ class AcpProvider implements SubagentProvider {
       args: this.config.args,
       cwd,
       permission: this.config.permission,
-      requestApproval: this.config.permission === 'ask' && this.ctx.approval !== undefined
-        ? (kind, signal) => {
+      ...(this.config.permission === 'ask' && this.ctx.approval !== undefined
+        ? {
+          requestApproval: (kind: ToolKind | 'unknown', signal: AbortSignal) => {
             const operation = kind === 'unknown' ? 'requested operation' : `${kind} operation`
             return this.ctx.approval.request({
               agent: request.parent,
@@ -185,8 +187,9 @@ class AcpProvider implements SubagentProvider {
               reason: `The ACP worker requests permission to perform the ${operation}.`,
               signal,
             })
-          }
-        : undefined,
+          },
+        }
+        : {}),
       env: this.config.env,
       disposeEofGraceMs: this.config.disposeEofGraceMs,
       disposeGraceMs: this.config.disposeGraceMs,

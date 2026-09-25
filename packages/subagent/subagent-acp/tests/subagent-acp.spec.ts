@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import ApprovalService from '@deepseek-ai/dsh-user-approval'
+import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
 import * as acp from '../src/index.ts'
@@ -43,7 +43,7 @@ const fakeParent = {
       return event
     },
   },
-} as unknown as Agent
+} as Agent
 
 function request(text = 'p', signal = new AbortController().signal, parent = fakeParent) {
   return { prompt: [{ type: 'text' as const, text }], parent, signal }
@@ -1535,7 +1535,7 @@ describe('dsh-subagent-acp', () => {
     const approvalRequests: Array<{ agent: Agent; toolName: string; reason?: string; signal?: AbortSignal }> = []
     ctx.on('approval/request', (approval) => {
       approvalRequests.push(approval)
-      return 'allowed-once'
+      return Promise.resolve<ApprovalOutcome>('allowed-once')
     })
 
     const run = await ctx.subagents.start('acp', request())
@@ -1579,7 +1579,7 @@ describe('dsh-subagent-acp', () => {
     const questions = vi.fn()
     ctx.on('approval/request', (approval) => {
       questions(approval)
-      return 'allowed-once'
+      return Promise.resolve<ApprovalOutcome>('allowed-once')
     })
 
     const run = await ctx.subagents.start('acp', request())

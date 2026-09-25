@@ -418,10 +418,20 @@ def main() -> None:
                     for posture in (permission_posture, read_only_posture, workspace_posture)
                     if posture.startswith("NOT VERIFIED")
                 ]
+                unsafe_postures = [
+                    posture
+                    for posture in (permission_posture, read_only_posture, workspace_posture)
+                    if posture.startswith("VERIFIED UNSAFE")
+                ]
                 if unverified_postures:
                     raise RuntimeError(
                         "ZeroStack ACP security source changed and requires review: "
                         + "; ".join(unverified_postures)
+                    )
+                if unsafe_postures:
+                    raise RuntimeError(
+                        "ZeroStack ACP failed the security gate; remote tool use remains disabled: "
+                        + "; ".join(unsafe_postures)
                     )
                 machine = platform.machine().lower()
                 summary = (
