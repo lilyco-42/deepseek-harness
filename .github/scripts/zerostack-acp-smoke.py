@@ -22,6 +22,8 @@ ZERO_STACK = ROOT / "zerostack" / "target" / "release" / (
     "zerostack.exe" if os.name == "nt" else "zerostack"
 )
 ACP_SOURCE = ROOT / "zerostack" / "src" / "extras" / "acp" / "mod.rs"
+UPSTREAM_REVISION = "16fadb3b8f29238a5716eaf937ecf9d41a42f946"
+PROFILE = os.environ.get("ZERO_STACK_PROFILE", "default")
 SAMPLES = 24
 SAMPLE_INTERVAL_SECONDS = 0.2
 
@@ -114,6 +116,24 @@ def acp_permission_posture() -> str:
     return "NOT VERIFIED (requires review of the changed permission implementation)"
 
 
+def acp_read_only_posture() -> str:
+    source = ACP_SOURCE.read_text(encoding="utf-8")
+    has_readonly_config = '"readonly" => SecurityMode::ReadOnly' in source
+    checks_readonly_flag = "cli.read_only" in source
+    if has_readonly_config and not checks_readonly_flag:
+        return "readonly config is supported; the --read-only CLI flag is not checked by ACP"
+    if has_readonly_config:
+        return "readonly config and --read-only CLI flag are present; verify behavior"
+    return "NOT VERIFIED (requires review of the changed ACP mode resolver)"
+
+
+def acp_workspace_posture() -> str:
+    source = ACP_SOURCE.read_text(encoding="utf-8")
+    if "the ACP server never chdirs to it" in source:
+        return "process working directory; start one ACP process per workspace"
+    return "NOT VERIFIED (requires review of ACP workspace handling)"
+
+
 def main() -> None:
     if not ZERO_STACK.is_file():
         raise FileNotFoundError(f"ZeroStack binary not found: {ZERO_STACK}")
@@ -175,12 +195,17 @@ def main() -> None:
             peak_kib = max(samples)
             average_kib = round(sum(samples) / len(samples))
             permission_posture = acp_permission_posture()
+            read_only_posture = acp_read_only_posture()
+            workspace_posture = acp_workspace_posture()
             machine = os.uname().machine if hasattr(os, "uname") else "windows"
             summary = (
                 f"### ZeroStack ACP smoke: {sys.platform} / {machine}\n\n"
-                f"- Pinned upstream revision: `36dddf038941978a6079762bb2799ec7e44504de`\n"
+                f"- Pinned upstream revision: `{UPSTREAM_REVISION}`\n"
+                f"- Cargo profile: `{PROFILE}`\n"
                 f"- ACP initialize + session/new: passed\n"
                 f"- ACP permission posture: **{permission_posture}**\n"
+                f"- ACP read-only configuration: {read_only_posture}\n"
+                f"- ACP workspace selection: {workspace_posture}\n"
                 "- Remote write eligibility: **blocked until permissions fail closed**\n"
                 f"- Resident memory after session creation ({len(samples)} samples over 4.8s): "
                 f"average {average_kib} KiB, peak {peak_kib} KiB\n"

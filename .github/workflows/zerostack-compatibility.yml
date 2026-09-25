@@ -24,10 +24,22 @@ jobs:
         include:
           - platform: linux-x64
             runner: ubuntu-24.04
+            profile: default
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
+            profile: default
           - platform: windows-x64
             runner: windows-latest
+            profile: default
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            profile: lean
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            profile: lean
+          - platform: windows-x64
+            runner: windows-latest
+            profile: lean
     steps:
       - uses: actions/checkout@v6
         with:
@@ -36,7 +48,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: gi-dellav/zerostack
-          ref: 36dddf038941978a6079762bb2799ec7e44504de
+          ref: 16fadb3b8f29238a5716eaf937ecf9d41a42f946
           path: zerostack
           persist-credentials: false
 
@@ -52,9 +64,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes mold
 
-      - name: Build pinned ZeroStack ACP binary
+      - name: Build default-feature ZeroStack ACP binary
+        if: matrix.profile == 'default'
         working-directory: zerostack
         run: cargo build --locked --release --features acp
 
+      - name: Build lean ZeroStack ACP + MCP binary
+        if: matrix.profile == 'lean'
+        working-directory: zerostack
+        run: cargo build --locked --release --no-default-features --features acp,mcp,archmd
+
       - name: Start ACP, create a session, and record resident memory
+        env:
+          ZERO_STACK_PROFILE: ${{ matrix.profile }}
         run: python .github/scripts/zerostack-acp-smoke.py
