@@ -8,8 +8,9 @@ import { PassThrough, type Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
 import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
 import * as acp from '../src/index.ts'
@@ -29,21 +30,40 @@ import { spawnSubprocess } from '@deepseek-ai/dsh-subprocess-local/src/spawn.ts'
 
 const mockServer = fileURLToPath(new URL('./mock-acp-server.ts', import.meta.url))
 
-/** Parent Agent stub with an open turn so approval requests can be audited on its session. */
-const parentEvents: Array<{ type: string; data?: Record<string, unknown> }> = [{ type: 'turn/start' }]
+/** Parent Agent stub with a real Session so approval requests are durably audited. */
+const parentId = SessionId('parent')
+const parentSession = Session.create(
+  parentId,
+  [{ type: 'turn/start', data: { turn: 1 } }],
+  { ...Session.create(parentId).header, cwd: process.cwd() },
+)
+const fakeInbox: Inbox = {
+  nextTurn: [],
+  nextStep: [],
+  clear() {},
+  append() {},
+  prepend() {},
+  replace() { return false },
+  remove() { return false },
+  splice() { return [] },
+}
 const fakeParent = {
-  id: 'parent',
-  session: {
-    header: { cwd: process.cwd() },
-    get seq() { return parentEvents.length },
-    eventAt: (seq: number) => parentEvents[seq],
-    append: (type: string, data: Record<string, unknown>) => {
-      const event = { type, data }
-      parentEvents.push(event)
-      return event
-    },
+  id: parentId,
+  session: parentSession,
+  options: {},
+  inbox: fakeInbox,
+  status: 'idle',
+  ctx: new Context(),
+  cancel() {},
+  whenIdle: async () => {},
+  runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>) {
+    return task(new AbortController().signal)
   },
-} as Agent
+  send() {},
+  followup() {},
+  steer() {},
+  inject() {},
+} satisfies Agent
 
 function request(text = 'p', signal = new AbortController().signal, parent = fakeParent) {
   return { prompt: [{ type: 'text' as const, text }], parent, signal }
@@ -1549,6 +1569,7 @@ describe('dsh-subagent-acp', () => {
       reason: 'The ACP worker requests permission to perform the edit operation.',
       signal: expect.any(AbortSignal),
     })
+    const parentEvents = parentSession.snapshotEvents()
     expect(parentEvents.slice(-2).map(event => event.type)).toEqual(['approval/asked', 'approval/decided'])
     expect(parentEvents.at(-1)?.data).toMatchObject({ outcome: 'allowed-once' })
     expect(result.diagnostic).toContain(expectedPermission('ask', 'edit', 'allowed'))
