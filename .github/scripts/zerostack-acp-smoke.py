@@ -112,7 +112,10 @@ def acp_permission_posture() -> str:
         return "NOT VERIFIED (permission implementation shape changed)"
     permission_implementation = source[start:end]
     auto_approves_ask = (
-        "Auto-approve Ask requests" in permission_implementation
+        re.search(
+            r"Auto-approve\s+Ask\s+requests", permission_implementation
+        )
+        is not None
         and "UserDecision::AllowOnce" in permission_implementation
     )
     if auto_approves_ask:
