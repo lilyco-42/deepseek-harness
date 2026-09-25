@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/scripts/zerostack-acp-smoke.py'
       - '.github/workflows/zerostack-compatibility.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

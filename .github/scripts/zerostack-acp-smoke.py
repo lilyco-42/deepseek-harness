@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,122 @@ UPSTREAM_REVISION = "16fadb3b8f29238a5716eaf937ecf9d41a42f946"
 PROFILE = os.environ.get("ZERO_STACK_PROFILE", "default")
 SAMPLES = 24
 SAMPLE_INTERVAL_SECONDS = 0.2
+MOCK_API_KEY = "zerostack-ci-synthetic-key"
+MOCK_MODEL = "lain42-ci-mock"
+MOCK_REPLY = "Lain42 mock gateway connected."
+
+
+class MockGateway:
+    """A local OpenAI-compatible endpoint that never contacts a real provider."""
+
+    def __init__(self) -> None:
+        self.model_requests: list[dict[str, Any]] = []
+        self.chat_requests: list[dict[str, Any]] = []
+        gateway = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, _format: str, *_args: Any) -> None:
+                return
+
+            def send_json(self, status: int, payload: dict[str, Any]) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def authorized(self) -> bool:
+                return self.headers.get("Authorization") == f"Bearer {MOCK_API_KEY}"
+
+            def do_GET(self) -> None:
+                if self.path not in ("/models", "/v1/models"):
+                    self.send_json(404, {"error": {"message": "unknown endpoint"}})
+                    return
+                allowed = self.authorized()
+                gateway.model_requests.append({"path": self.path, "authorized": allowed})
+                if not allowed:
+                    self.send_json(401, {"error": {"message": "invalid mock key"}})
+                    return
+                self.send_json(
+                    200,
+                    {
+                        "object": "list",
+                        "data": [{"id": MOCK_MODEL, "object": "model", "context_length": 4096}],
+                    },
+                )
+
+            def do_POST(self) -> None:
+                if self.path not in ("/chat/completions", "/v1/chat/completions"):
+                    self.send_json(404, {"error": {"message": "unknown endpoint"}})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(length))
+                except (ValueError, json.JSONDecodeError):
+                    self.send_json(400, {"error": {"message": "invalid JSON"}})
+                    return
+                allowed = self.authorized()
+                gateway.chat_requests.append(
+                    {"path": self.path, "authorized": allowed, "payload": payload}
+                )
+                if not allowed:
+                    self.send_json(401, {"error": {"message": "invalid mock key"}})
+                    return
+                if payload.get("model") != MOCK_MODEL:
+                    self.send_json(400, {"error": {"message": "unexpected model"}})
+                    return
+                if payload.get("stream"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    frames = (
+                        {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]},
+                        {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                         "choices": [{"index": 0, "delta": {"content": MOCK_REPLY}, "finish_reason": None}]},
+                        {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                    )
+                    for frame in frames:
+                        self.wfile.write(f"data: {json.dumps(frame)}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    self.close_connection = True
+                    return
+                self.send_json(
+                    200,
+                    {
+                        "id": "mock",
+                        "object": "chat.completion",
+                        "model": MOCK_MODEL,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": MOCK_REPLY},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                    },
+                )
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
 
 
 def read_stdout(process: subprocess.Popen[str], lines: queue.Queue[str | None]) -> None:
@@ -47,6 +164,7 @@ def request(
     request_id: int,
     method: str,
     params: dict[str, Any],
+    notifications: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     assert process.stdin is not None
     process.stdin.write(
@@ -71,7 +189,11 @@ def request(
             frame = json.loads(line)
         except json.JSONDecodeError as error:
             raise RuntimeError("ZeroStack wrote non-JSON data to ACP stdout") from error
-        if not isinstance(frame, dict) or frame.get("id") != request_id:
+        if not isinstance(frame, dict):
+            continue
+        if frame.get("id") != request_id:
+            if notifications is not None and "method" in frame:
+                notifications.append(frame)
             continue
         if "error" in frame:
             raise RuntimeError(f"ZeroStack ACP rejected {method}: {frame['error']}")
@@ -102,6 +224,16 @@ def resident_kib(pid: int) -> int | None:
         return int(value) if value else None
 
     return None
+
+
+def sample_resident_kib(pid: int) -> list[int]:
+    samples: list[int] = []
+    for _ in range(SAMPLES):
+        rss = resident_kib(pid)
+        if rss is not None:
+            samples.append(rss)
+        time.sleep(SAMPLE_INTERVAL_SECONDS)
+    return samples
 
 
 def acp_permission_posture() -> str:
@@ -138,109 +270,176 @@ def main() -> None:
     if not ZERO_STACK.is_file():
         raise FileNotFoundError(f"ZeroStack binary not found: {ZERO_STACK}")
 
-    environment = os.environ.copy()
-    # Session creation does not call a model. The placeholder keeps provider
-    # initialization deterministic without exposing or consuming a credential.
-    environment["OPENROUTER_API_KEY"] = "zerostack-ci-placeholder"
-    output_lines: queue.Queue[str | None] = queue.Queue()
-    stderr_tail: deque[str] = deque(maxlen=20)
-
-    with tempfile.TemporaryDirectory(prefix="zerostack-acp-smoke-") as workspace:
-        process = subprocess.Popen(
-            [str(ZERO_STACK), "--acp"],
-            cwd=workspace,
-            env=environment,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            bufsize=1,
-        )
-        threading.Thread(
-            target=read_stdout, args=(process, output_lines), daemon=True
-        ).start()
-        threading.Thread(
-            target=read_stderr, args=(process, stderr_tail), daemon=True
-        ).start()
-
-        try:
-            request(
-                process,
-                output_lines,
-                1,
-                "initialize",
-                {"protocolVersion": 1, "clientCapabilities": {}},
-            )
-            request(
-                process,
-                output_lines,
-                2,
-                "session/new",
-                {"cwd": workspace, "mcpServers": []},
+    gateway = MockGateway()
+    gateway.start()
+    try:
+        with tempfile.TemporaryDirectory(prefix="zerostack-acp-smoke-") as root:
+            workspace = Path(root) / "workspace"
+            config_dir = Path(root) / "config"
+            workspace.mkdir()
+            config_dir.mkdir()
+            (config_dir / "config.toml").write_text(
+                "\n".join(
+                    (
+                        'provider = "lain42-ci"',
+                        f'model = "{MOCK_MODEL}"',
+                        'default_permission_mode = "readonly"',
+                        "no_tools = true",
+                        "",
+                        "[custom_providers.lain42-ci]",
+                        'provider_type = "openai"',
+                        f'base_url = "{gateway.base_url}"',
+                        'api_key_env = "LAIN42_MOCK_API_KEY"',
+                        'api_style = "completions"',
+                        f'model = "{MOCK_MODEL}"',
+                        "",
+                    )
+                ),
+                encoding="utf-8",
             )
 
-            samples = []
-            for _ in range(SAMPLES):
-                if process.poll() is not None:
-                    raise RuntimeError("ZeroStack ACP exited during the memory sample")
-                rss = resident_kib(process.pid)
-                if rss is not None:
-                    samples.append(rss)
-                time.sleep(SAMPLE_INTERVAL_SECONDS)
-
-            if not samples:
-                raise RuntimeError("The runner did not provide a resident-memory reading")
-
-            peak_kib = max(samples)
-            average_kib = round(sum(samples) / len(samples))
-            permission_posture = acp_permission_posture()
-            read_only_posture = acp_read_only_posture()
-            workspace_posture = acp_workspace_posture()
-            unverified_postures = [
-                posture
-                for posture in (permission_posture, read_only_posture, workspace_posture)
-                if posture.startswith("NOT VERIFIED")
-            ]
-            if unverified_postures:
-                raise RuntimeError(
-                    "ZeroStack ACP security source changed and requires review: "
-                    + "; ".join(unverified_postures)
-                )
-            machine = os.uname().machine if hasattr(os, "uname") else "windows"
-            summary = (
-                f"### ZeroStack ACP smoke: {sys.platform} / {machine}\n\n"
-                f"- Pinned upstream revision: `{UPSTREAM_REVISION}`\n"
-                f"- Cargo profile: `{PROFILE}`\n"
-                f"- ACP initialize + session/new: passed\n"
-                f"- ACP permission posture: **{permission_posture}**\n"
-                f"- ACP read-only configuration: {read_only_posture}\n"
-                f"- ACP workspace selection: {workspace_posture}\n"
-                "- Remote write eligibility: **blocked until permissions fail closed**\n"
-                f"- Resident memory after session creation ({len(samples)} samples over 4.8s): "
-                f"average {average_kib} KiB, peak {peak_kib} KiB\n"
+            environment = os.environ.copy()
+            environment["ZS_CONFIG_DIR"] = str(config_dir)
+            environment["LAIN42_MOCK_API_KEY"] = MOCK_API_KEY
+            output_lines: queue.Queue[str | None] = queue.Queue()
+            stderr_tail: deque[str] = deque(maxlen=20)
+            process = subprocess.Popen(
+                [str(ZERO_STACK), "--acp"],
+                cwd=workspace,
+                env=environment,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
             )
-            print(summary)
-            summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-            if summary_path:
-                with open(summary_path, "a", encoding="utf-8") as summary_file:
-                    summary_file.write(summary + "\n")
-        finally:
-            if process.stdin is not None:
-                process.stdin.close()
+            threading.Thread(
+                target=read_stdout, args=(process, output_lines), daemon=True
+            ).start()
+            threading.Thread(
+                target=read_stderr, args=(process, stderr_tail), daemon=True
+            ).start()
+
             try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-                raise RuntimeError("ZeroStack ACP did not stop after stdin closed") from None
+                request(
+                    process,
+                    output_lines,
+                    1,
+                    "initialize",
+                    {"protocolVersion": 1, "clientCapabilities": {}},
+                )
+                session = request(
+                    process,
+                    output_lines,
+                    2,
+                    "session/new",
+                    {"cwd": str(workspace), "mcpServers": []},
+                )
+                session_id = session.get("sessionId")
+                if not isinstance(session_id, str) or not session_id:
+                    raise RuntimeError("ZeroStack ACP returned no sessionId")
 
-        if process.returncode != 0:
-            details = "\n".join(stderr_tail)
-            raise RuntimeError(
-                f"ZeroStack ACP exited with code {process.returncode}"
-                + (f"\n{details}" if details else "")
-            )
+                idle_samples = sample_resident_kib(process.pid)
+                if not idle_samples:
+                    raise RuntimeError("The runner did not provide resident-memory readings")
+
+                notifications: list[dict[str, Any]] = []
+                response = request(
+                    process,
+                    output_lines,
+                    3,
+                    "session/prompt",
+                    {
+                        "sessionId": session_id,
+                        "prompt": [
+                            {
+                                "type": "text",
+                                "text": "Reply with this exact confirmation: " + MOCK_REPLY,
+                            }
+                        ],
+                    },
+                    notifications,
+                )
+                response_text = json.dumps(
+                    {"response": response, "notifications": notifications},
+                    ensure_ascii=False,
+                )
+                if MOCK_REPLY not in response_text:
+                    raise RuntimeError("ACP did not stream the mock gateway reply")
+                if not gateway.model_requests or not all(
+                    item["authorized"] for item in gateway.model_requests
+                ):
+                    raise RuntimeError("The mock gateway did not receive an authorized model-list request")
+                if not gateway.chat_requests or not all(
+                    item["authorized"] for item in gateway.chat_requests
+                ):
+                    raise RuntimeError("The mock gateway did not receive an authorized chat request")
+                if any(
+                    item["payload"].get("model") != MOCK_MODEL
+                    or item["payload"].get("stream") is not True
+                    for item in gateway.chat_requests
+                ):
+                    raise RuntimeError("ZeroStack sent an unexpected model or non-streaming chat request")
+
+                model_samples = sample_resident_kib(process.pid)
+                if not model_samples:
+                    raise RuntimeError("The runner did not provide post-inference memory readings")
+
+                permission_posture = acp_permission_posture()
+                read_only_posture = acp_read_only_posture()
+                workspace_posture = acp_workspace_posture()
+                unverified_postures = [
+                    posture
+                    for posture in (permission_posture, read_only_posture, workspace_posture)
+                    if posture.startswith("NOT VERIFIED")
+                ]
+                if unverified_postures:
+                    raise RuntimeError(
+                        "ZeroStack ACP security source changed and requires review: "
+                        + "; ".join(unverified_postures)
+                    )
+                machine = os.uname().machine if hasattr(os, "uname") else "windows"
+                summary = (
+                    f"### ZeroStack ACP smoke: {sys.platform} / {machine}\n\n"
+                    f"- Pinned upstream revision: `{UPSTREAM_REVISION}`\n"
+                    f"- Cargo profile: `{PROFILE}`\n"
+                    "- ACP initialize + session/new + session/prompt: passed\n"
+                    "- Synthetic gateway model listing + bearer auth + streamed reply: passed\n"
+                    f"- ACP permission posture: **{permission_posture}**\n"
+                    f"- ACP read-only configuration: {read_only_posture}\n"
+                    f"- ACP workspace selection: {workspace_posture}\n"
+                    "- Remote write eligibility: **blocked until permissions fail closed**\n"
+                    f"- Idle resident memory ({len(idle_samples)} samples over 4.8s): "
+                    f"average {round(sum(idle_samples) / len(idle_samples))} KiB, "
+                    f"peak {max(idle_samples)} KiB\n"
+                    f"- Post-inference resident memory ({len(model_samples)} samples over 4.8s): "
+                    f"average {round(sum(model_samples) / len(model_samples))} KiB, "
+                    f"peak {max(model_samples)} KiB\n"
+                )
+                print(summary)
+                summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+                if summary_path:
+                    with open(summary_path, "a", encoding="utf-8") as summary_file:
+                        summary_file.write(summary + "\n")
+            finally:
+                if process.stdin is not None:
+                    process.stdin.close()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                    raise RuntimeError("ZeroStack ACP did not stop after stdin closed") from None
+
+            if process.returncode != 0:
+                details = "\n".join(stderr_tail)
+                raise RuntimeError(
+                    f"ZeroStack ACP exited with code {process.returncode}"
+                    + (f"\n{details}" if details else "")
+                )
+    finally:
+        gateway.stop()
 
 
 if __name__ == "__main__":
