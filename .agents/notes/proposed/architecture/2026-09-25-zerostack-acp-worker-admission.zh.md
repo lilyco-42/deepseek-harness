@@ -22,7 +22,18 @@ DeepSeek Harness（DSH）继续作为 Web 与移动端产品运行时，负责�
 
 这些数据表明仅 ACP 配置是一个可行的精简版本，ARM64 上的降幅最明显。测量对象是创建会话后的 worker，不包括完整 DSH 应用、活跃推理、CPU 负载或生产任务；也不能证明相对 DSH 的端到端内存节省。[GitHub Actions run 36112963016](https://github.com/lilyco-42/deepseek-harness/actions/runs/36112963016) 的 9 个构建和冒烟任务全部通过，源码审计仍检测到 ACP 自动批准 Ask，并阻止远程写入。
 
-ZeroStack 的自定义 OpenAI provider 支持配置 base URL，并从环境变量读取 API key；自定义 base URL 默认使用 Chat Completions（[provider 配置](https://github.com/gi-dellav/zerostack/blob/main/docs/CONFIG.md#openai-api-styles-and-custom-headers)）。因此 OpenAI 兼容的 Lain42 `/v1` 有望作为每个用户自己的模型路由，但本轮 CI 没有实际请求模型。在对外宣称已接通前，应先用合成测试 key 在 GitHub Actions 增加 mock gateway 冒烟，覆盖 `/models`、流式 `/chat/completions` 和认证；之后再在 CI 以外，用某位用户自行签发的受限 key 验证真实网关。该 key 只应保存在用户自己的节点，不应放进共享服务器配置或浏览器包。
+ZeroStack 的自定义 OpenAI provider 支持配置 base URL，并从环境变量读取 API key；自定义 base URL 默认使用 Chat Completions（[provider 配置](https://github.com/gi-dellav/zerostack/blob/main/docs/CONFIG.md#openai-api-styles-and-custom-headers)）。因此 OpenAI 兼容的 Lain42 `/v1` 有望作为每个用户自己的模型路由。[GitHub Actions run 36140336554](https://github.com/lilyco-42/deepseek-harness/actions/runs/36140336554) 中的 mock gateway 冒烟现已覆盖 `/models`、缺少 key 时拒绝请求，以及带 bearer 认证的流式 `/chat/completions`。这只证明它与合成网关的协议兼容，没有验证真实模型服务或用户凭据。对外宣称已接通前，仍应在 CI 以外用某位用户自行签发的受限 key 验证真实网关。该 key 只应保存在用户自己的节点，不应放进共享服务器配置或浏览器包。
+
+同一轮运行还在 Linux x64、Linux ARM64、Windows x64 和 Windows ARM64 上构建并启动了 ACP-only（`--no-default-features --features acp`）。每项冒烟测试都会初始化 ACP、创建会话、调用 mock gateway，并在空闲和 mock 推理后各采样进程 RSS 24 次、持续 4.8 秒：
+
+| 运行平台 | 空闲平均／峰值 | mock 推理后平均／峰值 |
+|---|---:|---:|
+| Linux x64 | 23,800 / 23,800 KiB | 23,092 / 23,092 KiB |
+| Linux ARM64 | 21,326 / 21,400 KiB | 21,140 / 21,140 KiB |
+| Windows x64 | 14,168 / 14,168 KiB | 15,836 / 15,836 KiB |
+| Windows ARM64 | 14,428 / 14,652 KiB | 15,756 / 15,956 KiB |
+
+run 36140336554 中全部 10 个构建和冒烟任务通过。这些短时 runner 样本不包含真实模型、有代表性的 coding 工作或同一 runner 上的 DSH 对照，因此只能证明 worker 占用较小，不能证明端到端节省。源码审计仍发现 ACP 会自动批准 `Ask`；远程写入仍被阻止。
 
 目前不要把 ZeroStack 暴露为可由网页控制的远程写入 worker。其 ACP 实现会自动用 `AllowOnce` 响应 `Ask` 权限请求；ACP 路径不检查 `--read-only` 标志；安全指南说明沙箱只约束 Bash，agent 自带文件工具与 MCP 服务器仍在沙箱之外（[权限实现](https://github.com/gi-dellav/zerostack/blob/16fadb3b8f29238a5716eaf937ecf9d41a42f946/src/extras/acp/mod.rs)、[安全指南](https://github.com/gi-dellav/zerostack/blob/16fadb3b8f29238a5716eaf937ecf9d41a42f946/SECURITY.md)）。版本说明：v1.7.2 发布说明提到 PR #212 修复“headless 模式 Ask fail closed”，但该修改针对非交互 `-p` CLI 调度；v1.7.2 标签下的 ACP 权限函数仍会创建 Ask 通道并以 `AllowOnce` 应答（[PR #212](https://github.com/gi-dellav/zerostack/pull/212)、[v1.7.2 ACP 源码](https://github.com/gi-dellav/zerostack/blob/v1.7.2/src/extras/acp/mod.rs)）。不能把这条发布说明当成 ACP 安全修复。未来的 Web 到设备链路必须做到每个账号独立运行 worker，并通过已测试的操作系统级沙箱，仅开放该账号选定的工作区和明确允许的网络目标。个人设备和所有者的私有 Radxa 不得进入共享 worker 池。
 
