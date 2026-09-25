@@ -125,7 +125,7 @@ describe('JsonRpcLineTransport', () => {
     bToA.write('{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":{"invalid":true}}}\n')
     finish.resolve({ ok: true })
 
-    const [chunk] = await response
+    const chunk = (await response)[0] as Buffer | string
     expect(requestSignal.aborted).toBe(false)
     expect(JSON.parse(String(chunk))).toEqual({ jsonrpc: '2.0', id: 'slow-1', result: { ok: true } })
     a.close()
@@ -147,7 +147,7 @@ describe('JsonRpcLineTransport', () => {
     bToA.write('{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":2}}\n')
     finish.resolve({ ok: true })
 
-    const [chunk] = await response
+    const chunk = (await response)[0] as Buffer | string
     expect(requestSignal.aborted).toBe(true)
     expect(JSON.parse(String(chunk))).toEqual({
       jsonrpc: '2.0',
@@ -173,7 +173,7 @@ describe('JsonRpcLineTransport', () => {
     a.close()
     finish.resolve({ ok: true })
 
-    const [chunk] = await response
+    const chunk = (await response)[0] as Buffer | string
     expect(requestSignal.aborted).toBe(true)
     expect(JSON.parse(String(chunk))).toEqual({
       jsonrpc: '2.0',

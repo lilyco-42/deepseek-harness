@@ -271,11 +271,11 @@ reader.on('line', (line) => {
       if (env.FAKE_APPROVAL_RESULT_FILE !== undefined) {
         const params: unknown = env.FAKE_RUNTIME_PARAMS === undefined
           ? {
-              sessionId: 'fake-session',
-              toolName: 'bash',
-              callId: 'tool-1',
-              reason: 'test approval',
-            }
+            sessionId: 'fake-session',
+            toolName: 'bash',
+            callId: 'tool-1',
+            reason: 'test approval',
+          }
           : JSON.parse(env.FAKE_RUNTIME_PARAMS)
         if (params === null || typeof params !== 'object' || Array.isArray(params)) {
           throw new Error('FAKE_RUNTIME_PARAMS must be a JSON object')

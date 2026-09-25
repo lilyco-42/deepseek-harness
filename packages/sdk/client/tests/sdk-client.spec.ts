@@ -518,7 +518,7 @@ describe('HarnessClient', () => {
       FAKE_APPROVAL_RESULT_FILE: resultFile,
       FAKE_RUNTIME_PARAMS: JSON.stringify({ sessionId: 'fake-session', toolName: 'read' }),
     }), {
-      onApprovalRequest: request => {
+      onApprovalRequest: (request) => {
         seen.push(request)
         return 'not-a-valid-outcome' as never
       },

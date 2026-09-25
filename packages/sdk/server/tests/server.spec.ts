@@ -1364,7 +1364,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     const creation = Promise.withResolvers<undefined>()
     const createAgent = ctx.agents.create.bind(ctx.agents)
     let disposeCalls = 0
-    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async options => {
+    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async (options) => {
       await creation.promise
       const handle = await createAgent(options)
       const dispose = async (): Promise<void> => {
