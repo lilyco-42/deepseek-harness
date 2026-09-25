@@ -6,7 +6,7 @@ Status: Recommended conditionally; remote write execution remains disabled.
 
 保留 DeepSeek Harness（DSH）作为 Lain42 的 Web／手机产品层、会话与模型路由核心。ZeroStack 只作为可选的、由用户在自己配对设备上运行的低资源 coding worker；不在共享网站服务器启动用户任务，也不让用户通过网页指定任意可执行文件、参数、工作目录或环境变量。
 
-这条建议解决的是“用户节点上的 worker 进程占用更小”，不是降低网站服务端内存。GitHub Actions 的最新空闲会话测量中，ZeroStack `--no-default-features --features acp` 的平均 RSS 为 Windows x64 14,036 KiB、Linux x64 23,581 KiB、Linux ARM64 21,330 KiB。测量没有包含模型推理，也没有与 DSH 做同机、同任务比较，因此目前只能确认 ZeroStack 自身较轻，不能声称端到端节省已证明。详见[接入条件与测量记录](../../notes/proposed/architecture/2026-09-25-zerostack-acp-worker-admission.md)。
+这条建议解决的是“用户节点上的 worker 进程占用更小”，不是降低网站服务端内存。最新 GitHub Actions run 36140336554 已在 Linux x64、Linux ARM64、Windows x64、Windows ARM64 验证 ACP-only 启动与 mock gateway 调用。空闲／mock 推理后的平均 RSS 分别为：Linux x64 23,800／23,092 KiB、Linux ARM64 21,326／21,140 KiB、Windows x64 14,168／15,836 KiB、Windows ARM64 14,428／15,756 KiB。该测试没有运行真实模型或代表性 coding 任务，也没有与 DSH 做同机、同任务比较，因此不能声称端到端节省已证明。详见[接入条件与测量记录](../../notes/proposed/architecture/2026-09-25-zerostack-acp-worker-admission.md)。
 
 ## 方案比较
 
