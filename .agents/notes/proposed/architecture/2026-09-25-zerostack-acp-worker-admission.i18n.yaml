@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-09-25-zerostack-acp-worker-admission.md
-2026-09-25-zerostack-acp-worker-admission.md: fea04a04a903ddd7f79c64d54755e80ecb71b2f0
-2026-09-25-zerostack-acp-worker-admission.zh.md: b0c234da0021d759fb15fee3cab044f056d3da81
+2026-09-25-zerostack-acp-worker-admission.md: c5bf38c01cb744868f23a06d9036effc11acb926
+2026-09-25-zerostack-acp-worker-admission.zh.md: 92c0186014b2a3f3f630fa83db524c511ce870f1
