@@ -11812,6 +11812,9 @@ importers:
       '@deepseek-ai/dsh-tool-subagent':
         specifier: workspace:*
         version: link:../tool-subagent
+      '@deepseek-ai/dsh-user-approval':
+        specifier: workspace:*
+        version: link:../../interaction/user-approval
 
   packages/subagent/subagent-claude-code:
     dependencies:

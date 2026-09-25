@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可将任务委派给运行在全新子进程中的 ACP 兼容 agent；子 agent 拥有独立的运行时、会话、模型和工具。每次运行只共享选定的工作目录，通过 ACP 发送任务，并返回子 agent 的最终答案或安全错误；中间消息和工具流量不会进入父级对话。权限提示由配置的策略自动应答，无需人工介入。当委派需要进程隔离或需要使用非 Harness ACP agent 时选择本包；当子 agent 必须共享父级能力时，选择进程内后端。
+使用本包可将任务委派给运行在全新子进程中的 ACP 兼容 agent；子 agent 拥有独立的运行时、会话、模型和工具。每次运行只共享选定的工作目录，通过 ACP 发送任务，并返回子 agent 的最终答案或安全错误；中间消息和工具流量不会进入父级对话。权限提示可按配置拒绝、自动应答，或交给父会话的审批界面。当委派需要进程隔离或需要使用非 Harness ACP agent 时选择本包；当子 agent 必须共享父级能力时，选择进程内后端。
 
 ## 目录
 
@@ -39,12 +39,14 @@ kind: "package-reference"
 | `command` | 必填 | 每次运行时 spawn 的可执行文件（子 ACP agent） |
 | `args` | `[]` | 命令参数 |
 | `cwd` | 父会话 cwd | 子进程及其 ACP 会话的工作目录覆盖值 |
-| `permission` | `reject` | 自动应答权限请求：拒绝，或选择第一个 `allow_once` 或 `allow_always` 选项（`allow`） |
+| `permission` | `reject` | `reject` 拒绝提示；`allow` 选择第一个 `allow_once` 或 `allow_always`；`ask` 请求父会话审批，并且只接受 `allow_once` |
 | `env` | `{}` | 叠加在已清理凭据的父环境之上的显式子环境 |
 | `disposeEofGraceMs` | `6000` | stdin EOF 之后、平台终止之前的宽限 |
 | `disposeGraceMs` | `3000` | 失败后观察结构化进程事实的时限；在 POSIX 上也是 SIGTERM 到 SIGKILL 的宽限 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-subagent-acp)是每个受支持字段及其 JSDoc 的穷尽式真源。
+
+`ask` 策略通过组合的 `dsh-user-approval` 服务在父会话显示请求。如果审批服务、回答器或 ACP `allow_once` 选项不可用，子请求会被取消。
 
 DeepSeek Harness 子进程使用产品启动器和一个显式的绝对路径 `DSH_HOME`。隔离的 home 可防止嵌套运行时发现启动者个人的 profile 或凭据；通用 ACP 提供方不会把这一要求强加给非 DSH agent。
 
@@ -160,7 +162,7 @@ spawn、初始化或新建会话失败会在发布前拒绝，通常先证明 ma
 - **仅支持本地工作区**——解析后的工作目录是交给同一台机器上子进程的本地路径；远程工作区映射尚未设计。
 - **不支持可选启动时能力**——本提供方无法在远程进程内应用 `agentOptions`、`outputSchema`、深度上限、工具过滤器或 persona，因此 seam 会拒绝需要它们的请求。
 - **只收集已提交的 `agent_message_chunk` 文本**——自动化服务器把推理（reasoning）、工具活动、计划和其他 trace 数据保留在子 agent 会话日志中，不通过 ACP 发出。
-- **权限提示自动应答**（`permission: allow | reject`）——不会把子 agent 的 `session/request_permission` 呈现给人。
+- **审批界面归属父会话**——`permission: ask` 只把封闭的 ACP 操作类型交给 `dsh-user-approval`；不信任或显示子 agent 的标题与选项文本，并且只会选择 ACP `allow_once` 选项。
 
 <a id="dev-note"></a>
 ### 开发备注
