@@ -50,6 +50,9 @@ jobs:
           - platform: windows-x64
             runner: windows-latest
             profile: acp-only
+          - platform: windows-arm64
+            runner: windows-11-vs2026-arm
+            profile: acp-only
     steps:
       - uses: actions/checkout@v6
         with:

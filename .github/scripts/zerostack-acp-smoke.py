@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import platform
 import queue
 import re
 import subprocess
@@ -422,7 +423,7 @@ def main() -> None:
                         "ZeroStack ACP security source changed and requires review: "
                         + "; ".join(unverified_postures)
                     )
-                machine = os.uname().machine if hasattr(os, "uname") else "windows"
+                machine = platform.machine().lower()
                 summary = (
                     f"### ZeroStack ACP smoke: {sys.platform} / {machine}\n\n"
                     f"- Pinned upstream revision: `{UPSTREAM_REVISION}`\n"
