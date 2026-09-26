@@ -378,7 +378,20 @@ jobs:
         run: CI=true pnpm run prepare:primary-runtime --target linux-x64 --output "$RUNNER_TEMP/office-runtime" --cache "$RUNNER_TEMP/office-runtime-downloads"
 
       - name: Run compatibility, snapshot, and artifact gates
+        id: consumers
         run: pnpm run check:ci:consumers
+
+      - name: Record ACP diagnostic session after a consumer failure
+        if: failure() && steps.consumers.outcome == 'failure'
+        run: DSH_SNAPSHOT=record pnpm exec vitest run --config vitest.snapshot.config.ts --update snapshots/session/headless.snapshot.ts -t 'replays subagent-acp-diagnostic'
+
+      - name: Upload recorded ACP diagnostic session
+        if: failure() && steps.consumers.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: subagent-acp-diagnostic-recorded-${{ github.sha }}
+          path: snapshots/session/subagent-acp-diagnostic/session.v3.jsonl
+          if-no-files-found: error
 
 
   node-compat:

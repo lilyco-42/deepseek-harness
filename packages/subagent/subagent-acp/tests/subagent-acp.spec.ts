@@ -1563,8 +1563,8 @@ describe('dsh-subagent-acp', () => {
     await run.dispose()
 
     expect(approvalRequests).toHaveLength(1)
+    expect(approvalRequests[0]?.agent).toBe(fakeParent)
     expect(approvalRequests[0]).toMatchObject({
-      agent: fakeParent,
       toolName: 'ACP edit',
       reason: 'The ACP worker requests permission to perform the edit operation.',
     })

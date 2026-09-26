@@ -3009,7 +3009,7 @@ export interface Config {
 export type PermissionPolicy = 'allow' | 'ask' | 'reject'
 ```
 
-Source: [`packages/subagent/subagent-acp/src/index.ts:28`](../packages/subagent/subagent-acp/src/index.ts)
+Source: [`packages/subagent/subagent-acp/src/index.ts:29`](../packages/subagent/subagent-acp/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-claude-code"></a>
 
