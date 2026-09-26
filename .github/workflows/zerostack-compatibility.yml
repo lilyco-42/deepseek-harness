@@ -53,6 +53,12 @@ jobs:
             profile: acp-only
           - platform: windows-arm64
             runner: windows-11-vs2026-arm
+            profile: default
+          - platform: windows-arm64
+            runner: windows-11-vs2026-arm
+            profile: lean
+          - platform: windows-arm64
+            runner: windows-11-vs2026-arm
             profile: acp-only
     steps:
       - uses: actions/checkout@v6
