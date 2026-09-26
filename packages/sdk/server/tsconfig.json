@@ -30,10 +30,16 @@
       "path": "../../core/session"
     },
     {
+      "path": "../../session/session-persistence"
+    },
+    {
       "path": "../protocol"
     },
     {
       "path": "../../subagent/subagent"
+    },
+    {
+      "path": "../../interaction/user-approval"
     }
   ]
 }

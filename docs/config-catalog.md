@@ -2980,9 +2980,11 @@ export interface Config {
    */
   cwd?: string
   /**
-   * How to auto-answer the child's `session/request_permission` prompts:
-   * `reject` (default — decline every prompt) or `allow` (approve via the first
-   * `allow_once` or `allow_always` option). No prompt is surfaced to a human.
+   * How to answer the child's `session/request_permission` prompts:
+   * `reject` (default) declines every prompt; `allow` picks the first
+   * `allow_once` or `allow_always` option without asking; `ask` routes an
+   * `allow_once` request through the parent session's approval service. If the
+   * service, answerer, or one-shot option is unavailable, the request is denied.
    */
   permission: PermissionPolicy
   /**
@@ -3003,11 +3005,11 @@ export interface Config {
   disposeGraceMs?: number
 }
 
-/** Fixed response to child permission requests: reject by default, or select the first allow option. */
-export type PermissionPolicy = 'allow' | 'reject'
+/** Fixed response to child permission requests: ask the parent user, allow, or reject. */
+export type PermissionPolicy = 'allow' | 'ask' | 'reject'
 ```
 
-Source: [`packages/subagent/subagent-acp/src/index.ts:27`](../packages/subagent/subagent-acp/src/index.ts)
+Source: [`packages/subagent/subagent-acp/src/index.ts:29`](../packages/subagent/subagent-acp/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-claude-code"></a>
 

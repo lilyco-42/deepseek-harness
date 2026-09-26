@@ -6,7 +6,7 @@
  */
 
 import type { ContentBlock, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-protocol'
+import type { SdkApprovalOutcome, SdkApprovalRequestParams, SdkPromptContentBlock } from '@deepseek-ai/dsh-sdk-protocol'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 /** One server-to-client notification as received off the wire. */
@@ -19,6 +19,12 @@ export interface HarnessNotification {
 
 /** Predicate deciding whether a subscription receives a notification. */
 export type NotificationFilter = (notification: HarnessNotification) => boolean
+
+/** Called when the runtime needs the SDK host's one-shot approval decision. */
+export type ApprovalRequestHandler = (
+  request: SdkApprovalRequestParams,
+  signal: AbortSignal,
+) => Promise<SdkApprovalOutcome> | SdkApprovalOutcome
 
 /** Launch and timeout options for {@link HarnessClient}. */
 export interface HarnessClientOptions {
@@ -50,6 +56,8 @@ export interface HarnessClientOptions {
   disposeEofGraceMs?: number
   /** Termination confirmation window (ms) after SIGTERM/SIGKILL during `close()` (default 3000). */
   disposeGraceMs?: number
+  /** Human approval bridge. Omission rejects every approval request as unavailable. */
+  onApprovalRequest?: ApprovalRequestHandler
 }
 
 /** Options for the high-level {@link DeepSeekHarness} wrapper. */

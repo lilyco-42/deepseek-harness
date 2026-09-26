@@ -891,27 +891,30 @@ test('performs no lifecycle requests for removed signals or title-only edits', a
   assert.deepEqual(fixture.requests, [])
 })
 
-test('keeps trusted preflight before token minting and required policy unconditional', () => {
+test('keeps trusted preflight repository-scoped before token minting', () => {
   const source = readFileSync(new URL('../workflows/issue-policy.yml', import.meta.url), 'utf8')
   const job = source.slice(source.indexOf('  policy:'))
   assert.ok(job.includes('    name: Issue policy'))
   assert.ok(!job.slice(0, job.indexOf('    steps:')).includes('    if:'))
   assert.ok(source.includes('types: [opened, edited, synchronize, reopened, labeled, unlabeled, ready_for_review, review_requested]'))
   const steps = job.split('      - name: ').slice(1)
-  assert.equal(steps.length, 4)
-  assert.ok(steps[0].includes('ref: ${{ github.event.repository.default_branch }}'))
-  assert.ok(steps[0].includes('persist-credentials: false'))
+  assert.equal(steps.length, 5)
+  assert.ok(steps[0].includes("if: ${{ github.repository != 'deepseek-harness/deepseek-harness' }}"))
+  assert.ok(steps[1].includes("if: ${{ github.repository == 'deepseek-harness/deepseek-harness' }}"))
+  assert.ok(steps[1].includes('ref: ${{ github.event.repository.default_branch }}'))
+  assert.ok(steps[1].includes('persist-credentials: false'))
   assert.doesNotMatch(source, /pull_request\.head|pull_request_target/)
-  assert.ok(steps[1].includes('id: preflight'))
-  assert.ok(steps[1].includes('GITHUB_TOKEN: ${{ github.token }}'))
-  assert.ok(steps[1].includes('node .github/issue-management/policy.mjs pr-preflight'))
-  assert.ok(steps[1].includes('if [ -f .github/issue-management/selective-preflight.json ]; then'))
-  assert.doesNotMatch(steps[1], /secrets\.|PROJECT_TOKEN|if:/)
-  assert.ok(steps[2].includes("if: ${{ steps.preflight.outputs.needs-project == 'true' }}"))
-  assert.ok(steps[2].includes('permission-organization-projects: read'))
-  assert.ok(steps[3].includes('PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}'))
-  assert.ok(steps[3].includes('run: node .github/issue-management/policy.mjs pr'))
-  assert.ok(steps[3].includes("if: ${{ steps.preflight.outputs.legacy-automated != 'true' }}"))
+  assert.ok(steps[2].includes('id: preflight'))
+  assert.ok(steps[2].includes('GITHUB_TOKEN: ${{ github.token }}'))
+  assert.ok(steps[2].includes('node .github/issue-management/policy.mjs pr-preflight'))
+  assert.ok(steps[2].includes('if [ -f .github/issue-management/selective-preflight.json ]; then'))
+  assert.ok(steps[2].includes("if: ${{ github.repository == 'deepseek-harness/deepseek-harness' }}"))
+  assert.doesNotMatch(steps[2], /secrets\.|PROJECT_TOKEN/)
+  assert.ok(steps[3].includes("github.repository == 'deepseek-harness/deepseek-harness' && steps.preflight.outputs.needs-project == 'true'"))
+  assert.ok(steps[3].includes('permission-organization-projects: read'))
+  assert.ok(steps[4].includes('PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}'))
+  assert.ok(steps[4].includes('run: node .github/issue-management/policy.mjs pr'))
+  assert.ok(steps[4].includes("steps.preflight.outputs.exempt != 'true' && steps.preflight.outputs.legacy-exempt != 'true'"))
 })
 
 test('runs trusted rollout selection with absent and present capability markers', { skip: process.platform === 'win32' ? 'The policy workflow executes under hosted Ubuntu bash' : false }, (t) => {
@@ -922,10 +925,10 @@ test('runs trusted rollout selection with absent and present capability markers'
     .split('\n').map((line) => line.slice(10)).join('\n')
   assert.deepEqual(JSON.parse(readFileSync(new URL('./selective-preflight.json', import.meta.url), 'utf8')), { version: 1 })
   const cases = [
-    { name: 'legacy human draft', type: 'User', draft: true, marker: false, expected: 'legacy-automated=false\nneeds-project=true\n' },
-    { name: 'legacy human ready', type: 'User', draft: false, marker: false, expected: 'legacy-automated=false\nneeds-project=true\n' },
-    { name: 'legacy bot', type: 'Bot', marker: false, expected: 'legacy-automated=true\nneeds-project=false\n' },
-    { name: 'legacy app', type: 'App', marker: false, expected: 'legacy-automated=true\nneeds-project=false\n' },
+    { name: 'legacy human draft', type: 'User', draft: true, marker: false, expected: 'legacy-exempt=true\nneeds-project=false\n' },
+    { name: 'legacy human ready', type: 'User', draft: false, marker: false, expected: 'legacy-exempt=false\nneeds-project=true\n' },
+    { name: 'legacy bot', type: 'Bot', marker: false, expected: 'legacy-exempt=true\nneeds-project=false\n' },
+    { name: 'legacy app', type: 'App', marker: false, expected: 'legacy-exempt=true\nneeds-project=false\n' },
     { name: 'modern exempt', type: 'Bot', marker: true, expected: 'exempt=true\nneeds-project=false\n' },
     { name: 'modern failure', type: 'User', marker: true, failure: true, expected: '' },
   ]

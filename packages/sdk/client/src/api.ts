@@ -115,6 +115,26 @@ export class DeepSeekHarness implements AsyncDisposable {
   }
 
   /**
+   * Cancel the current work for one session while keeping the runtime available.
+   * @param sessionId - the target session id.
+   * @returns settlement of the cancellation request.
+   */
+  async cancelSession(sessionId: string): Promise<void> {
+    await this.start()
+    await this.clientInstance.cancelSession(sessionId)
+  }
+
+  /**
+   * Dispose one session while keeping the runtime available for other sessions.
+   * @param sessionId - the target session id.
+   * @returns settlement of the close request.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    await this.start()
+    await this.clientInstance.closeSession(sessionId)
+  }
+
+  /**
    * Shut down and reap the runtime subprocess. Idempotent and terminal —
    * a closed harness no longer retries a failed handshake.
    * @returns settlement of the complete teardown.
@@ -145,7 +165,7 @@ export function createProcessDeepSeekHarness(
   return new Constructor({
     ...runtime.cwd === undefined ? {} : { processCwd: runtime.cwd },
     ...options,
-  }, () => createProcessHarnessClient(runtime))
+  }, () => createProcessHarnessClient(runtime, options))
 }
 
 /** Per-run options: target session and streaming observer. */
@@ -165,6 +185,23 @@ export class HarnessSession {
    * @param id - the wire session id this handle runs on.
    */
   constructor(readonly harness: DeepSeekHarness, readonly id: string) {}
+
+  /**
+   * Cancel this session's current work.
+   * @returns settlement of the cancellation request.
+   */
+  cancel(): Promise<void> {
+    return this.harness.cancelSession(this.id)
+  }
+
+  /**
+   * Dispose this session's live agent while keeping its harness runtime and
+   * durable history open. A later run can reopen the same session id.
+   * @returns settlement of the close request.
+   */
+  close(): Promise<void> {
+    return this.harness.closeSession(this.id)
+  }
 
   /**
    * Queue one prompt, then observe the whole session through its next idle.

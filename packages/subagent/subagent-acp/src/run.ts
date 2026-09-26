@@ -17,14 +17,15 @@ import {
   type ToolKind,
 } from '@agentclientprotocol/sdk'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AssistantOutputFold, settleRunResult, subprocessRunHandle } from '@deepseek-ai/dsh-subagent'
 import type { SubagentResult, SubagentRun, SubagentStartRequest, SubagentStopReason } from '@deepseek-ai/dsh-subagent'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 
-/** Fixed response to child permission requests: reject by default, or select the first allow option. */
-export type PermissionPolicy = 'allow' | 'reject'
+/** Fixed response to child permission requests: ask the parent user, allow, or reject. */
+export type PermissionPolicy = 'allow' | 'ask' | 'reject'
 
 /** Resolved spawn spec for an ACP child process (no defaults — see Config). */
 export interface AcpRunSpec {
@@ -38,8 +39,10 @@ export interface AcpRunSpec {
    * else the delegating parent session's workspace.
    */
   cwd: string
-  /** How to auto-answer the child's permission prompts. */
+  /** How to answer the child's permission prompts. */
   permission: PermissionPolicy
+  /** Parent-session approval bridge; absent or unresolved requests are denied. */
+  requestApproval?: (kind: ToolKind | 'unknown', signal: AbortSignal) => Promise<ApprovalOutcome>
   /**
    * Extra environment variables to ADD for the child (e.g. the child harness's
    * `DEEPSEEK_API_KEY`). Merged on top of the subprocess seam's scrubbed
@@ -134,7 +137,7 @@ function failureDiagnostic(facts: AcpFailureFacts): string {
 
 /** Fixed permission fact; ACP tool titles and option text never enter it. */
 function permissionDiagnostic(permission: AcpPermissionDecision): string {
-  return `ACP unattended decision (policy: ${permission.policy}; request: ${permission.request}; decision: ${permission.decision})`
+  return `ACP permission decision (policy: ${permission.policy}; request: ${permission.request}; decision: ${permission.decision})`
 }
 
 /** Put the operation failure first, followed by the latest permission decision. */
@@ -428,27 +431,45 @@ export async function startAcpRun(request: SubagentStartRequest, spec: AcpRunSpe
       // surfaced — the subagent returns only its final answer.
       return Promise.resolve()
     })
-    .onRequest(methods.client.session.requestPermission, ({ params }) => {
-      // Auto-answer by the configured policy. `allow` selects the first option
-      // whose kind is `allow_once` or `allow_always`; if the child offered none (or we
-      // reject), answer `cancelled` so the child does not proceed.
+    .onRequest(methods.client.session.requestPermission, async ({ params }) => {
+      const kind = permissionRequestKind(params.toolCall.kind)
+      if (spec.permission === 'ask') {
+        // Never translate one user approval into an ACP session-wide grant.
+        const allowOnce = params.options.find(o => o.kind === 'allow_once')
+        if (allowOnce !== undefined && spec.requestApproval !== undefined) {
+          let outcome: ApprovalOutcome
+          try {
+            outcome = await spec.requestApproval(kind, request.signal)
+          } catch {
+            outcome = 'unavailable'
+          }
+          if (outcome === 'allowed-once') {
+            latestPermission = { policy: 'ask', request: kind, decision: 'allowed' }
+            return { outcome: { outcome: 'selected', optionId: allowOnce.optionId } }
+          }
+        }
+        latestPermission = { policy: 'ask', request: kind, decision: 'denied' }
+        return { outcome: { outcome: 'cancelled' } }
+      }
+      // Auto-answer by the configured unattended policy. `allow` selects the
+      // first option whose kind is `allow_once` or `allow_always`.
       if (spec.permission === 'allow') {
         const allow = params.options.find(o => o.kind === 'allow_once' || o.kind === 'allow_always')
         if (allow !== undefined) {
           latestPermission = {
             policy: 'allow',
-            request: permissionRequestKind(params.toolCall.kind),
+            request: kind,
             decision: 'allowed',
           }
-          return Promise.resolve({ outcome: { outcome: 'selected', optionId: allow.optionId } })
+          return { outcome: { outcome: 'selected', optionId: allow.optionId } }
         }
       }
       latestPermission = {
         policy: spec.permission,
-        request: permissionRequestKind(params.toolCall.kind),
+        request: kind,
         decision: 'denied',
       }
-      return Promise.resolve({ outcome: { outcome: 'cancelled' } })
+      return { outcome: { outcome: 'cancelled' } }
     })
 
   const connection = clientApp.connect(ndJsonStream(

@@ -403,9 +403,11 @@ describe.skipIf(MODE === 'record')('web e2e: file and session references through
     await target.waitFor({ timeout: 15_000 })
     await target.click()
     await page.locator('[data-chat-flow-kind="user"]').filter({ hasText: 'Research notes' }).waitFor({ timeout: 15_000 })
-    const session = scaffold.ctx.sessions.get(SessionId(TARGET_SESSION_ID))
-    if (session === undefined) throw new Error('reference target session is unavailable')
-    const inputs = session.snapshotEvents().filter(event => event.type === 'user/message')
+    using observed = await scaffold.ctx.sessionQuery.observeSession(
+      SessionId(TARGET_SESSION_ID),
+      { projectionMode: 'none' },
+    )
+    const inputs = observed.events.filter(event => event.type === 'user/message')
     expect(inputs.map(event => event.data.source.kind)).toEqual(['user', 'session-reference'])
     expect(inputs[0]?.seq).toBeLessThan(inputs[1]!.seq)
     expect(JSON.stringify(inputs[1]?.data)).toContain('<referenced-sessions>snapshot</referenced-sessions>')

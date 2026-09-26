@@ -35,7 +35,8 @@
  * - `FAKE_INIT_READY` + `FAKE_INIT_GO`: touch the READY file when `initialize`
  *   arrives, then poll for the GO file before answering (deterministic
  *   cancel-during-handshake window).
- * - `FAKE_HANG_PROMPT`: never answer `session/prompt` (for timeout/dispose tests).
+ * - `FAKE_HANG_PROMPT`: accept `session/prompt` but leave its turn running until cancellation.
+ * - `FAKE_HANG_PROMPT_REQUEST`: never answer `session/prompt` (for request-timeout tests).
  * - `FAKE_EXIT_DURING_PROMPT`: commit one interrupted assistant message, then
  *   exit 17 while the owned session run is waiting for its terminal state.
  * - `FAKE_STREAM_THEN_MALFORMED`: commit a partial assistant attempt for the
@@ -47,6 +48,7 @@
  * - `FAKE_STDERR`: write this line to stderr at boot (diagnostics-tail probe).
  * - `FAKE_STDERR_NO_NEWLINE`: write this to stderr WITHOUT a newline (buffer-flush probe).
  * - `FAKE_RECORD_INIT`: append each `initialize` params JSON to this file (handshake probe).
+ * - `FAKE_RUNTIME_METHOD` + optional `FAKE_RUNTIME_PARAMS`: send a scripted runtime request after initialize.
  */
 
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
@@ -79,6 +81,7 @@ function notify(method: string, params: object): void {
 }
 
 let seq = 0
+const cancelledSessions = new Set<string>()
 function event(sessionId: string, type: string, data: object): void {
   notify('session.event', { sessionId, event: { type, seq: seq++, time: 0, data } })
 }
@@ -224,7 +227,13 @@ const reader = createInterface({ input: process.stdin })
 reader.on('line', (line) => {
   if (line.trim().length === 0) return
   const frame = JSON.parse(line) as { id?: string | number; method?: string; params?: Record<string, unknown> }
-  if (frame.method === undefined || frame.id === undefined) return
+  if (frame.method === undefined) {
+    if (env.FAKE_APPROVAL_RESULT_FILE !== undefined && frame.id !== undefined) {
+      appendFileSync(env.FAKE_APPROVAL_RESULT_FILE, `${line}\n`)
+    }
+    return
+  }
+  if (frame.id === undefined) return
   const respond = (result: object): void => { write({ jsonrpc: '2.0', id: frame.id, result }) }
   switch (frame.method) {
     case 'initialize':
@@ -259,6 +268,25 @@ reader.on('line', (line) => {
         return
       }
       respond({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } })
+      if (env.FAKE_APPROVAL_RESULT_FILE !== undefined) {
+        const params: unknown = env.FAKE_RUNTIME_PARAMS === undefined
+          ? {
+            sessionId: 'fake-session',
+            toolName: 'bash',
+            callId: 'tool-1',
+            reason: 'test approval',
+          }
+          : JSON.parse(env.FAKE_RUNTIME_PARAMS)
+        if (params === null || typeof params !== 'object' || Array.isArray(params)) {
+          throw new Error('FAKE_RUNTIME_PARAMS must be a JSON object')
+        }
+        write({
+          jsonrpc: '2.0',
+          id: 'runtime-approval-1',
+          method: env.FAKE_RUNTIME_METHOD ?? 'approval/request',
+          params,
+        })
+      }
       return
     case 'session/prompt': {
       const sessionId = sessionIdOf(frame.params)
@@ -301,7 +329,11 @@ reader.on('line', (line) => {
         setImmediate(() => { process.exit(17) })
         return
       }
-      if (env.FAKE_HANG_PROMPT !== undefined) return
+      if (env.FAKE_HANG_PROMPT_REQUEST !== undefined) return
+      if (env.FAKE_HANG_PROMPT !== undefined && !cancelledSessions.has(sessionId)) {
+        respond({ messageId })
+        return
+      }
       if (env.FAKE_MALFORMED !== undefined || env.FAKE_MALFORMED_PROMPT !== undefined) {
         respond({})
         return
@@ -311,6 +343,19 @@ reader.on('line', (line) => {
       respond({ messageId })
       return
     }
+    case 'session/cancel': {
+      const sessionId = sessionIdOf(frame.params)
+      if (env.FAKE_HANG_PROMPT !== undefined) {
+        cancelledSessions.add(sessionId)
+        event(sessionId, 'turn/end', { turn: 0, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+        notify('session.status', { sessionId, status: 'idle' })
+      }
+      respond({})
+      return
+    }
+    case 'session/close':
+      respond({})
+      return
     case 'shutdown':
       respond({})
       // An EOF-ignoring fake also refuses the protocol exit, so the client's

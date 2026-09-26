@@ -6,9 +6,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-user-approval'
+import type { ApprovalOutcome, ApprovalRequestEvent } from '@deepseek-ai/dsh-user-approval/types'
 import { resolve } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import { admitEncodedImages, type EncodedImageAttachment, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, ReasoningEffortId, type ContentBlock, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf, type Scoped } from '@deepseek-ai/dsh-scope'
@@ -20,9 +23,13 @@ import type {
   InitializeParams,
   InitializeResult,
   JsonRpcTransportPeer,
+  SessionCancelParams,
+  SessionCloseParams,
   SessionEventNotification,
   SessionPromptParams,
   SessionPromptResult,
+  SdkApprovalOutcome,
+  SdkApprovalRequestParams,
   SdkEncodedImageBlock,
   SubagentFinishedNotification,
   SubagentStartedNotification,
@@ -62,9 +69,32 @@ export interface HarnessSdkJsonRpcServerOptions {
   maxTokensAsSuccess?: boolean
 }
 
+function isSdkApprovalOutcome(value: unknown): value is SdkApprovalOutcome {
+  switch (value) {
+    case 'allowed-once':
+    case 'rejected':
+    case 'cancelled':
+    case 'unavailable': return true
+    default: return false
+  }
+}
+
+function approvalOutcome(value: unknown): ApprovalOutcome {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || !('outcome' in value)) return 'unavailable'
+  return isSdkApprovalOutcome(value.outcome) ? value.outcome : 'unavailable'
+}
+
 function successStatus(reason: string, options: HarnessSdkJsonRpcServerOptions): 'ok' | 'error' {
   if (reason === 'completed') return 'ok'
   return reason === 'max-tokens' && options.maxTokensAsSuccess === true ? 'ok' : 'error'
+}
+
+function sessionIdParam(params: Record<string, unknown> | undefined, method: string): string {
+  const sessionId = params?.sessionId
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    throw new TypeError(`${method} params.sessionId must be a non-empty string`)
+  }
+  return sessionId
 }
 
 /**
@@ -81,6 +111,7 @@ export class HarnessSdkJsonRpcServer {
   private llmFiber: { dispose(): Promise<void> } | undefined
   private readonly sessions = new Map<string, SessionRecord>()
   private readonly sessionCreations = new Map<string, Promise<SessionRecord>>()
+  private readonly sessionClosures = new Map<string, Promise<void>>()
   private readonly disposers: (() => void)[] = []
   private shutdownTask: Promise<Record<string, never>> | undefined
   private shuttingDown = false
@@ -126,6 +157,27 @@ export class HarnessSdkJsonRpcServer {
           : { lastAssistantMessage: [...info.lastAssistantMessage] }),
       }
       transport.notify('subagent.finished', payload)
+    }))
+    this.disposers.push(ctx.on('approval/request', async (request: ApprovalRequestEvent, next) => {
+      const sessionId = String(request.agent.session.id)
+      const record = this.sessions.get(sessionId)
+      // Only an exact SDK-owned root agent may ask its host. Other agents in
+      // this shared runtime remain available to their own composed answerers.
+      if (record?.handle.agent !== request.agent) return next()
+      const params: SdkApprovalRequestParams = {
+        sessionId,
+        toolName: request.toolName,
+        ...(request.callId === undefined ? {} : { callId: String(request.callId) }),
+        ...(request.reason === undefined ? {} : { reason: request.reason }),
+      }
+      // The request signal carries cancellation across JSON-RPC. The transport
+      // sends $/cancelRequest so a host can dismiss its pending UI as well.
+      try {
+        return approvalOutcome(await transport.request('approval/request', params, request.signal))
+      } catch {
+        // A missing/disconnected host must deny the requested escalation.
+        return request.signal?.aborted ? 'cancelled' : 'unavailable'
+      }
     }))
   }
 
@@ -194,7 +246,65 @@ export class HarnessSdkJsonRpcServer {
     return { messageId: message.id }
   }
 
+  /**
+   * Cancel the current work for one SDK-owned session.
+   * @param params - the target session id.
+   * @returns an empty result after cancellation is requested.
+   */
+  cancel(params: SessionCancelParams): Record<string, never> {
+    if (!this.initialized) throw new Error('SDK server is not initialized')
+    const record = this.sessions.get(params.sessionId)
+    if (record === undefined) {
+      throw new Error(`SDK session is not open: ${params.sessionId}`)
+    }
+    this.assertLiveAgent(record, params.sessionId)
+    record.handle.agent.cancel({ kind: 'user' })
+    return {}
+  }
+
+  /**
+   * Dispose one live SDK-owned agent while preserving the durable session so
+   * a later prompt can reopen it.
+   * @param params - the target session id.
+   * @returns an empty result after the session is closed.
+   */
+  async closeSession(params: SessionCloseParams): Promise<Record<string, never>> {
+    if (!this.initialized) throw new Error('SDK server is not initialized')
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    const sessionId = params.sessionId
+    const activeClose = this.sessionClosures.get(sessionId)
+    if (activeClose !== undefined) {
+      await activeClose
+      return {}
+    }
+    const closing = this.disposeSession(sessionId)
+    this.sessionClosures.set(sessionId, closing)
+    try {
+      await closing
+    } finally {
+      this.sessionClosures.delete(sessionId)
+    }
+    return {}
+  }
+
+  private async disposeSession(sessionId: string): Promise<void> {
+    let record = this.sessions.get(sessionId)
+    if (record === undefined) {
+      const pending = this.sessionCreations.get(sessionId)
+      if (pending !== undefined) {
+        record = await pending.catch(() => undefined)
+      }
+    }
+    if (record !== undefined && this.sessions.get(sessionId) === record) {
+      this.sessions.delete(sessionId)
+      await record.handle.dispose()
+    }
+  }
+
   private assertLiveAgent(rec: SessionRecord, sessionId: string): void {
+    if (this.sessions.get(sessionId) !== rec) {
+      throw new Error(`SDK session is not open: ${sessionId}`)
+    }
     if (this.ctx.agents.get(rec.handle.agent.id) !== rec.handle.agent) {
       throw new Error(`session agent was disposed outside the server: ${sessionId}`)
     }
@@ -213,7 +323,8 @@ export class HarnessSdkJsonRpcServer {
   private async performShutdown(): Promise<Record<string, never>> {
     this.shuttingDown = true
     const pendingCreations = [...this.sessionCreations.values()]
-    await Promise.allSettled(pendingCreations)
+    const pendingClosures = [...this.sessionClosures.values()]
+    await Promise.allSettled([...pendingCreations, ...pendingClosures])
     this.sessionCreations.clear()
     const records = [...this.sessions.values()]
     this.sessions.clear()
@@ -251,6 +362,10 @@ export class HarnessSdkJsonRpcServer {
         return this.initialize(params as unknown as InitializeParams)
       case 'session/prompt':
         return this.prompt(params as unknown as SessionPromptParams)
+      case 'session/cancel':
+        return this.cancel({ sessionId: sessionIdParam(params, 'session/cancel') })
+      case 'session/close':
+        return this.closeSession({ sessionId: sessionIdParam(params, 'session/close') })
       case 'shutdown':
         return this.shutdown()
       default:
@@ -259,7 +374,12 @@ export class HarnessSdkJsonRpcServer {
   }
 
   private async getOrCreateSession(sessionId: string): Promise<SessionRecord> {
-    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+    this.assertNotShuttingDown()
+    const closing = this.sessionClosures.get(sessionId)
+    if (closing !== undefined) {
+      await closing
+      this.assertNotShuttingDown()
+    }
     const existing = this.sessions.get(sessionId)
     if (existing) return existing
     const pending = this.sessionCreations.get(sessionId)
@@ -273,21 +393,42 @@ export class HarnessSdkJsonRpcServer {
     return creation
   }
 
+  private assertNotShuttingDown(): void {
+    if (this.shuttingDown) throw new Error('SDK server is shutting down')
+  }
+
   private async createSession(sessionId: string): Promise<SessionRecord> {
     // No preset composition: this server's compositions keep the model-facing
     // rows in the host plane, so this agent reads them from the global layer. A
     // deployment that configures a roster has to join one here first
     // (@deepseek-ai/dsh-agent-preset-registry README, "Composing a child agent").
-    const handle = await this.ctx.agents.create({
-      sessionId: brandString<SessionId>(sessionId),
-      meta: { cwd: this.cwd },
-      agentOptions: {
-        provider: this.provider,
-        model: this.model,
-        ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
-        ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
-      },
-    })
+    const exactSessionId = brandString<SessionId>(sessionId)
+    const agentOptions: AgentOptions = {
+      provider: this.provider,
+      model: this.model,
+      ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
+      ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
+    }
+    // Closing an SDK session disposes its live Agent but deliberately retains
+    // the durable log. Check storage metadata before choosing create vs resume:
+    // replaying an existing id through create fails with SessionAlreadyExists
+    // and, more importantly, would lose the conversation the caller expects.
+    const persistence = this.ctx.get('sessionPersistence')
+    const stored = persistence === undefined ? undefined : await persistence.stat(exactSessionId)
+    const handle = stored === undefined
+      ? await this.ctx.agents.create({
+        sessionId: exactSessionId,
+        meta: { cwd: this.cwd },
+        agentOptions,
+      })
+      : await this.ctx.agents.resume({
+        resumeSessionId: exactSessionId,
+        agentOptions,
+      })
+    if (this.shuttingDown) {
+      await handle.dispose()
+      throw new Error('SDK server is shutting down')
+    }
     const rec: SessionRecord = { handle }
     this.sessions.set(sessionId, rec)
     return rec

@@ -201,6 +201,102 @@ describe('Python SDK dsh profile keyless smoke', () => {
     }
   }, 40_000)
 
+  it('cancels a running turn and reopens durable history after session close', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdk-session-lifecycle-'))
+    const modelRequests: Record<string, unknown>[] = []
+    const secondModelRequest = Promise.withResolvers<undefined>()
+    const modelServer = createServer((request, response) => {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk: string) => { body += chunk })
+      request.on('end', () => {
+        const payload = JSON.parse(body) as Record<string, unknown>
+        modelRequests.push(payload)
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        if (JSON.stringify(payload).includes('cancel this pending turn')) {
+          response.flushHeaders()
+          secondModelRequest.resolve(undefined)
+          return
+        }
+        response.end(messagesResponse({ type: 'text', text: 'done' }, 'end_turn'))
+      })
+    })
+    await new Promise<void>(resolve => modelServer.listen(0, '127.0.0.1', resolve))
+    const address = modelServer.address()
+    if (address === null || typeof address === 'string') throw new Error('model server did not bind a TCP port')
+    const child = execa(launch.command, [...launch.args, '--profile', 'sdk'], {
+      cwd: repoRoot,
+      env: {
+        ...launch.env,
+        DSH_HOME: join(root, '.dsh'),
+        DSH_TELEMETRY_DISABLED: '1',
+        DEEPSEEK_API_KEY: 'session-lifecycle-no-call',
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${address.port}`,
+      },
+      timeout: 35_000,
+      killSignal: 'SIGKILL',
+      reject: false,
+    })
+    const lines: string[] = []
+    let stdoutBuffer = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString('utf8')
+      const parts = stdoutBuffer.split('\n')
+      stdoutBuffer = parts.pop() ?? ''
+      lines.push(...parts)
+    })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+
+    const send = (id: number, method: string, params?: Record<string, unknown>) => {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) })}\n`)
+      return waitForLine(lines, value => value.id === id, () => stderr)
+    }
+    const turnEnd = (kind: string) => waitForLine(lines, (value) => {
+      if (value.method !== 'session.event') return false
+      const params = value.params as Record<string, unknown> | undefined
+      const event = params?.event as Record<string, unknown> | undefined
+      const data = event?.data as Record<string, unknown> | undefined
+      const reason = data?.reason as Record<string, unknown> | undefined
+      return params?.sessionId === 'lifecycle' && event?.type === 'turn/end' && reason?.kind === kind
+    }, () => stderr)
+
+    try {
+      await send(1, 'initialize', { cwd: root, provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+      await send(2, 'session/prompt', {
+        sessionId: 'lifecycle', contentBlocks: [{ type: 'text', text: 'first durable turn' }],
+      })
+      await turnEnd('completed')
+
+      await send(3, 'session/prompt', {
+        sessionId: 'lifecycle', contentBlocks: [{ type: 'text', text: 'cancel this pending turn' }],
+      })
+      await secondModelRequest.promise
+      await send(4, 'session/cancel', { sessionId: 'lifecycle' })
+      await turnEnd('aborted')
+      await send(5, 'session/close', { sessionId: 'lifecycle' })
+
+      await send(6, 'session/prompt', {
+        sessionId: 'lifecycle', contentBlocks: [{ type: 'text', text: 'continue after close' }],
+      })
+      await turnEnd('completed')
+      const resumedHistory = modelRequests.find(request => JSON.stringify(request).includes('continue after close'))
+      expect(resumedHistory).toBeDefined()
+      expect(JSON.stringify(resumedHistory)).toContain('first durable turn')
+
+      await send(7, 'shutdown')
+      const exit = await child
+      expect(exit.timedOut, stderr).toBe(false)
+      expect(exit.signal, stderr).toBeUndefined()
+      expect(exit.exitCode, `signal=${String(exit.signal)}; stderr=${stderr}`).toBe(0)
+    } finally {
+      child.kill('SIGKILL')
+      await child
+      await new Promise<void>(resolve => modelServer.close(() => { resolve() }))
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 40_000)
+
   it.each([
     { label: 'boots the standalone minimal profile through its generated manifest', editorEnabled: false },
     { label: 'executes the documented editor opt-in patch with sdk-minimal', editorEnabled: true },
@@ -336,6 +432,127 @@ describe('Python SDK dsh profile keyless smoke', () => {
       await rm(root, { recursive: true, force: true })
     }
   }, 40_000)
+
+  it.skipIf(process.platform !== 'linux')('relays a real sandbox escalation to the SDK host and executes only after one-shot approval', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-sdk-approval-'))
+    const outputFile = join(root, 'approved.txt')
+    const modelRequests: Record<string, unknown>[] = []
+    const modelServer = createServer((request, response) => {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk: string) => { body += chunk })
+      request.on('end', () => {
+        modelRequests.push(JSON.parse(body) as Record<string, unknown>)
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        const attempt = modelRequests.length
+        if (attempt <= 2) {
+          response.end(messagesResponse({
+            type: 'tool_use',
+            id: `approval-call-${attempt}`,
+            name: 'bash',
+            input: {
+              command: `echo approved > ${outputFile}`,
+              description: 'write the approval fixture',
+              ...(attempt === 2 ? {
+                sandbox_permissions: 'workspace-write',
+                justification: 'The test needs to write one file in its workspace.',
+              } : {}),
+            },
+          }, 'tool_use'))
+          return
+        }
+        response.end(messagesResponse({ type: 'text', text: 'The approved file was written.' }, 'end_turn'))
+      })
+    })
+    await new Promise<void>(resolve => modelServer.listen(0, '127.0.0.1', resolve))
+    const address = modelServer.address()
+    if (address === null || typeof address === 'string') throw new Error('approval model fixture did not bind')
+    const child = execa(launch.command, [...launch.args, '--profile', 'sdk'], {
+      cwd: root,
+      env: {
+        ...launch.env,
+        DSH_HOME: join(root, '.dsh'),
+        DSH_PERMISSION_MODE: 'read-only',
+        DSH_TELEMETRY_DISABLED: '1',
+        DEEPSEEK_API_KEY: 'approval-bridge-no-call',
+        DEEPSEEK_BASE_URL: `http://127.0.0.1:${address.port}`,
+      },
+      timeout: 45_000,
+      killSignal: 'SIGKILL',
+      reject: false,
+    })
+    const lines: string[] = []
+    let stdoutBuffer = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString('utf8')
+      const parts = stdoutBuffer.split('\n')
+      stdoutBuffer = parts.pop() ?? ''
+      lines.push(...parts)
+    })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+
+    try {
+      const send = (id: number, method: string, params?: Record<string, unknown>) => {
+        child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) })}\n`)
+        return waitForLine(lines, value => value.id === id, () => stderr)
+      }
+      await send(1, 'initialize', { cwd: root, provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+      await send(2, 'session/prompt', {
+        sessionId: 'approval-session',
+        contentBlocks: [{ type: 'text', text: 'Write the fixture after I approve the workspace escalation.' }],
+      })
+
+      const approval = await waitForLine(lines, value => value.method === 'approval/request', () => stderr)
+      expect(approval).toMatchObject({
+        jsonrpc: '2.0',
+        method: 'approval/request',
+        params: {
+          sessionId: 'approval-session',
+          toolName: 'bash',
+          callId: 'approval-call-2',
+          reason: 'The test needs to write one file in its workspace.',
+        },
+      })
+      child.stdin.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: approval.id,
+        result: { outcome: 'allowed-once' },
+      })}\n`)
+
+      const turnEnd = await waitForLine(lines, (value) => {
+        if (value.method !== 'session.event') return false
+        const params = value.params as Record<string, unknown> | undefined
+        const event = params?.event as Record<string, unknown> | undefined
+        return params?.sessionId === 'approval-session' && event?.type === 'turn/end'
+      }, () => stderr)
+      expect(turnEnd).toMatchObject({ params: { event: { data: { reason: { kind: 'completed' } } } } })
+      expect(await readFile(outputFile, 'utf8')).toBe('approved\n')
+      expect(modelRequests).toHaveLength(3)
+      const finalMessages = modelRequests[2]?.messages as { role?: string; content?: unknown }[]
+      const approvalResult = finalMessages.find((message) => {
+        if (message.role !== 'user' || !Array.isArray(message.content)) return false
+        return message.content.some((part: unknown) => {
+          if (typeof part !== 'object' || part === null) return false
+          return 'type' in part && part.type === 'tool_result'
+            && 'tool_use_id' in part && part.tool_use_id === 'approval-call-2'
+            && 'is_error' in part && part.is_error === false
+        })
+      })
+      expect(approvalResult).toBeDefined()
+
+      await send(3, 'shutdown')
+      const exit = await child
+      expect(exit.timedOut, stderr).toBe(false)
+      expect(exit.signal, stderr).toBeUndefined()
+      expect(exit.exitCode, `signal=${String(exit.signal)}; stderr=${stderr}`).toBe(0)
+    } finally {
+      child.kill('SIGKILL')
+      await child
+      await new Promise<void>(resolve => modelServer.close(() => { resolve() }))
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 50_000)
 
   it.each([false, true])('exits after startup failure with stdin open (logs blocked: %s)', async (blocked) => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-sdk-startup-exit-'))

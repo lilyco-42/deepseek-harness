@@ -25,8 +25,9 @@ jobs:
   # all three jobs enter runner allocation independently.
   #
   # FAILOVER (Linux): each Linux enterprise job resolves its pool through the
-  # DSH_CI_FAILOVER_LINUX repository variable. Unset (normal), the expressions
-  # pick the hosted enterprise pools below. Setting the variable to
+  # DSH_CI_FAILOVER_LINUX repository variable. Unset (normal), upstream selects
+  # the hosted enterprise pools below; forks use GitHub-hosted VMs because they
+  # do not inherit upstream runner registrations. Setting the variable to
   # 'selfhosted' (repo Settings → Actions → Variables; writer-manageable
   # repository state — not PR-editable, no merge required) retargets all
   # three onto the in-house
@@ -46,7 +47,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
-          || 'dsh-ubuntu-24-04-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-ubuntu-24-04-16core'
+          || 'ubuntu-24.04' }}
     name: node 24 / static
     env:
       # Shared hosts expose host CPUs, not an isolated allocation.
@@ -103,9 +105,37 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run static gates
+        id: static
         env:
           DSH_ARCHIVE_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: pnpm run check:ci:static
+
+      - name: Regenerate config catalog for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-config-catalog
+
+      - name: Upload regenerated config catalog
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-catalog-generated-${{ github.sha }}
+          path: docs/config-catalog.md
+          if-no-files-found: error
+
+      - name: Regenerate module graph for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-module-graph
+
+      - name: Upload regenerated module graph
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-graph-generated-${{ github.sha }}
+          path: |
+            docs/module-graph.md
+            docs/module-graph.zh.md
+            docs/module-graph.i18n.yaml
+          if-no-files-found: error
 
   node-24-coverage:
     if: github.event_name == 'pull_request'
@@ -114,7 +144,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
-          || 'dsh-ubuntu-24-04-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-ubuntu-24-04-16core'
+          || 'ubuntu-24.04' }}
     name: node 24 / coverage
     env:
       # Shared hosts expose host CPUs, not an isolated allocation.
@@ -243,7 +274,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
-          || 'dsh-ubuntu-24-04-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-ubuntu-24-04-16core'
+          || 'ubuntu-24.04' }}
     name: node 24 / snapshots and artifacts
     env:
       # Shared hosts expose host CPUs, not an isolated allocation.
@@ -361,7 +393,20 @@ jobs:
         run: CI=true pnpm run prepare:primary-runtime --target linux-x64 --output "$RUNNER_TEMP/office-runtime" --cache "$RUNNER_TEMP/office-runtime-downloads"
 
       - name: Run compatibility, snapshot, and artifact gates
+        id: consumers
         run: pnpm run check:ci:consumers
+
+      - name: Refresh ACP diagnostic session after a consumer failure
+        if: failure() && steps.consumers.outcome == 'failure'
+        run: DSH_SNAPSHOT=refresh pnpm exec vitest run --config vitest.snapshot.config.ts --update snapshots/session/headless.snapshot.ts -t 'subagent-acp-diagnostic through dsh'
+
+      - name: Upload refreshed ACP diagnostic session
+        if: failure() && steps.consumers.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: subagent-acp-diagnostic-recorded-${{ github.sha }}
+          path: snapshots/session/subagent-acp-diagnostic/session.v3.jsonl
+          if-no-files-found: error
 
 
   node-compat:
@@ -507,7 +552,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
-          || 'dsh-windows-2025-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-windows-2025-16core'
+          || 'windows-2025' }}
     name: windows node 24 / build & observational
     timeout-minutes: 60
     env:
@@ -569,7 +615,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
-          || 'dsh-windows-2025-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-windows-2025-16core'
+          || 'windows-2025' }}
     name: windows node 24 / coverage
     timeout-minutes: 120
     env:
@@ -647,7 +694,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
-          || 'dsh-windows-2025-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-windows-2025-16core'
+          || 'windows-2025' }}
     name: windows node 24 / native tests
     timeout-minutes: 60
     steps:

@@ -58,6 +58,38 @@ export interface SessionPromptResult {
   messageId: string
 }
 
+/** Target for a user cancellation of one SDK-owned agent. */
+export interface SessionCancelParams {
+  /** The SDK session id to cancel. */
+  sessionId: string
+}
+
+/** Target for disposing one SDK-owned agent without shutting down the runtime. */
+export interface SessionCloseParams {
+  /** The SDK session id to close. */
+  sessionId: string
+}
+
+/** One-shot approval question sent from the runtime to its SDK host. */
+export interface SdkApprovalRequestParams {
+  /** SDK-owned session whose user is being asked. */
+  sessionId: string
+  /** Tool whose exact call is waiting for approval. */
+  toolName: string
+  /** Correlates the question with an already-streamed tool call when available. */
+  callId?: string
+  /** Human-readable reason supplied by the tool, such as a sandbox escalation justification. */
+  reason?: string
+}
+
+/** Closed, fail-closed approval vocabulary shared by every SDK language. */
+export type SdkApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/** Result returned by an SDK host for one approval question. */
+export interface SdkApprovalRequestResult {
+  outcome: SdkApprovalOutcome
+}
+
 /** Deployment-mapped SDK outcome: `ok` for an accepted result, `error` otherwise. */
 export type SdkRunStatus = 'ok' | 'error'
 
@@ -115,5 +147,12 @@ export interface HarnessSdkNotificationMap {
 export interface HarnessSdkRequestMap {
   'initialize': { params: InitializeParams; result: InitializeResult }
   'session/prompt': { params: SessionPromptParams; result: SessionPromptResult }
+  'session/cancel': { params: SessionCancelParams; result: Record<string, never> }
+  'session/close': { params: SessionCloseParams; result: Record<string, never> }
   'shutdown': { params: undefined; result: Record<string, never> }
+}
+
+/** Runtime-to-host requests; these always require an explicit one-shot answer. */
+export interface HarnessSdkHostRequestMap {
+  'approval/request': { params: SdkApprovalRequestParams; result: SdkApprovalRequestResult }
 }

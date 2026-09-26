@@ -272,6 +272,10 @@ fs.appendFileSync(${JSON.stringify(openLog)}, JSON.stringify({ path, action, con
       expect(geometry.openFontSize).toBe('11px')
       await page.setViewportSize({ width: 480, height: 900 })
       const row = page.locator('[data-presented-files-row]')
+      const frame = page.locator('[data-sidebar-collapsed="true"]').filter({ has: row })
+      // Wait for AppFrame's ResizeObserver-driven narrow layout before the test helper scrolls
+      // the delivery row; scrolling against the old desktop tracks can leave it offscreen.
+      await frame.waitFor({ state: 'attached' })
       await scrollIntoView(row)
       for (const card of await row.getByRole('button').all()) {
         const bounds = await card.boundingBox()

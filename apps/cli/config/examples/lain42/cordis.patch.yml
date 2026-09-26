@@ -1,0 +1,38 @@
+# Opt-in single-user Lain42 model route for the official dsh Web or headless profile.
+# Set LAIN42_MODEL and LAIN42_API_KEY in the node owner's environment.
+# This overlay does not make the local Web server safe for public multi-user use.
+- id: agent-default-model
+  config:
+    provider: lain42
+    model: !!js process.env.LAIN42_MODEL
+
+- id: llm-pi-ai
+  config:
+    providers:
+      lain42:
+        displayName: Lain42
+        api: openai-completions
+        baseURL: https://api.lain42.top/v1
+        apiKeyEnv: LAIN42_API_KEY
+        models:
+          - id: !!js process.env.LAIN42_MODEL
+
+# The first-party DeepSeek provider and its search endpoint are unrelated to
+# the Lain42 API. Keep public URL fetch available; an independent search backend
+# must be added before advertising web_search as usable.
+- id: llm-deepseek
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: web
+  config:
+    fetchProvider: http
+
+# The stock profile can include canonical session events in DeepSeek requests
+# and export feedback via OTel. A Lain42 deployment does neither by default.
+- id: session-log-deepseek
+  config:
+    enabled: false
+- id: session-telemetry-otel
+  config:
+    mode: DISABLED

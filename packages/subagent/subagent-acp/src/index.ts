@@ -9,7 +9,9 @@
 
 import { accessSync, constants, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
+import type { ToolKind } from '@agentclientprotocol/sdk'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-user-approval'
 import z from '@deepseek-ai/schemastery'
 import type {
   ResolvedSubagentStartRequest,
@@ -40,9 +42,11 @@ export interface Config {
    */
   cwd?: string
   /**
-   * How to auto-answer the child's `session/request_permission` prompts:
-   * `reject` (default — decline every prompt) or `allow` (approve via the first
-   * `allow_once` or `allow_always` option). No prompt is surfaced to a human.
+   * How to answer the child's `session/request_permission` prompts:
+   * `reject` (default) declines every prompt; `allow` picks the first
+   * `allow_once` or `allow_always` option without asking; `ask` routes an
+   * `allow_once` request through the parent session's approval service. If the
+   * service, answerer, or one-shot option is unavailable, the request is denied.
    */
   permission: PermissionPolicy
   /**
@@ -68,7 +72,7 @@ export const Config: z<Config> = z.object({
   command: z.string().required(),
   args: z.array(z.string()).default([]),
   cwd: z.string(),
-  permission: z.union(['allow', 'reject'] as const).default('reject'),
+  permission: z.union(['allow', 'ask', 'reject'] as const).default('reject'),
   env: z.dict(z.string()).default({}),
   disposeEofGraceMs: z.number().default(DEFAULT_DISPOSE_EOF_GRACE_MS),
   disposeGraceMs: z.number().default(DEFAULT_DISPOSE_GRACE_MS),
@@ -168,11 +172,25 @@ class AcpProvider implements SubagentProvider {
       this.ctx.logger.warn(`subagent-acp "${this.name}": child start failed: %o`, error)
       throw failure
     }
+    const approval = this.ctx.get('approval')
     const spec: AcpRunSpec = {
       command: this.config.command,
       args: this.config.args,
       cwd,
       permission: this.config.permission,
+      ...(this.config.permission === 'ask' && approval !== undefined
+        ? {
+          requestApproval: (kind: ToolKind | 'unknown', signal: AbortSignal) => {
+            const operation = kind === 'unknown' ? 'requested operation' : `${kind} operation`
+            return approval.request({
+              agent: request.parent,
+              toolName: `ACP ${kind}`,
+              reason: `The ACP worker requests permission to perform the ${operation}.`,
+              signal,
+            })
+          },
+        }
+        : {}),
       env: this.config.env,
       disposeEofGraceMs: this.config.disposeEofGraceMs,
       disposeGraceMs: this.config.disposeGraceMs,
