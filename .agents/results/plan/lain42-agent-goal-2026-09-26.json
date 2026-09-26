@@ -1,7 +1,18 @@
 {
   "title": "Lain42 全平台 Agent：三条端到端流程与分阶段交付",
   "status": "active",
+  "revision_date": "2026-09-27",
   "goal": "把 Lain42 做成打开网页或手机即可使用的全平台 Agent：默认使用网站模型，先可靠跑通真实多轮聊天、搜索/URL/GitHub OAuth 后由模型回答、用户确认附件后由模型分析这三条流程；所有私有数据按账户隔离；CLI/MCP 只在本人授权设备执行；客户端承担合适的解析与展示；积分、用量和知识空间由 Lain42 统一管理。",
+  "next_acceptance_gate": "在新增外围功能前，完成真实多轮聊天、公开搜索/URL/GitHub OAuth 到同轮模型回答、确认后的附件分析、双账号数据隔离；个人设备离线时前三项仍可用。",
+  "evidence_status": {
+    "conversation_continuity": "部分通过：Actions 和真实浏览器抽查完成；需纳入多模型回归。",
+    "public_url_to_model_answer": "单场景通过：线上读取 ast-grep README 并生成带来源摘要；需纳入流程回归。",
+    "public_search_to_model_answer": "未通过验收。",
+    "github_oauth_to_model_answer": "未通过验收；OAuth 卡片状态不能替代实际读取和回答证据。",
+    "attachment_to_model_answer": "未通过验收。",
+    "two_account_isolation": "未通过验收。",
+    "device_independence": "初步通过：A7A 离线时普通网页聊天仍可用；需加入自动化验收。"
+  },
   "constraints": [
     "普通聊天、公开搜索和网站 GitHub OAuth 不依赖个人设备在线。",
     "Radxa A7A 只属于站点所有者，是可选私有设备，不是共享后端。",
