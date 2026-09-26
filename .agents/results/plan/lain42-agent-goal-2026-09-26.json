@@ -1,161 +1,518 @@
 {
-  "title": "Lain42 全平台 Agent：三条端到端流程与分阶段交付",
+  "title": "Lain42 全平台 Agent：DSH 单一对话核心与端到端放行",
   "status": "active",
   "revision_date": "2026-09-27",
-  "goal": "把 Lain42 做成打开网页或手机即可使用的全平台 Agent：访客受限试用，登录用户默认使用网站模型；先可靠跑通真实多轮聊天、搜索/URL/GitHub OAuth 后由模型回答、用户确认附件后由模型分析这三条流程；所有私有数据按账户隔离；CLI/MCP 只在本人授权设备执行；客户端承担合适的解析与展示；Lain42 统一管理积分账本、用量和普通 5 GB／会员 20 GB 私有知识空间。",
+  "goal": "让用户打开网页或手机即可使用 Lain42 网站模型聊天、检索资料并分析用户选择的文件；DSH 管理唯一的对话与工具循环，New API 负责模型网关，Lain42 负责账户、授权、额度和数据所有权；CLI/MCP 只在用户授权的本人设备运行；客户端承担适合本地的解析和展示；提供统一积分账本与普通用户 5 GB、会员 20 GB 的私有知识空间。",
+  "north_star_acceptance": [
+    "普通多轮对话、搜索/URL/GitHub OAuth 后由当前轮模型回答、用户确认附件后由模型分析全部通过真实浏览器验证。",
+    "会话、凭据、附件、设备、知识对象和用量按已验证账户隔离；浏览器传来的 userId/workspaceId 不被当作授权。",
+    "个人设备全部离线时，普通聊天、公开搜索和网站 GitHub OAuth 仍可用。",
+    "Actions 自动化通过；未通过 P0 放行门前不切换默认入口或部署 DSH 切流。"
+  ],
   "architecture_decisions": [
-    "Web/PWA 是统一入口；Tauri 复用同一界面和授权，不另建业务循环。",
-    "DSH 是唯一对话与工具循环；New API 是模型网关；Lain42 负责身份、授权、额度、账本和用户数据。",
-    "搜索/网页读取按 CORS 与安全限制选择浏览器或受限服务端执行；文件解析和代码展示优先客户端 JS/Worker/按需 WASM。",
-    "CLI/MCP 只在用户明确选择的本人设备运行；A7A 属于站点所有者，不作为共享 worker。",
-    "MCP/CLI/ACP 是可替换适配协议，不替代租户授权；ZeroStack 等 worker 延后至隔离与资源收益得到验证。"
-  ],
-  "next_acceptance_gate": "在新增外围功能前，完成真实多轮聊天、公开搜索/URL/GitHub OAuth 到同轮模型回答、确认后的附件分析、双账号数据隔离；个人设备离线时前三项仍可用。",
-  "evidence_status": {
-    "conversation_continuity": "单场景语义通过但整体未通过：new-api commit 4f9032e；CI run 36263767947、服务包 run 36263767975 均通过并部署 agent-flat-4f9032e。默认模型实测你好→刚才不是只问了个问好，能承认没接好并继续询问，设备离线且未调工具；耗时 30.16 秒。仍需多模型/重复回归并调查延迟长尾。",
-    "public_url_to_model_answer": "单场景通过：线上读取 ast-grep README 并生成带来源摘要；需纳入流程回归。",
-    "public_search_to_model_answer": "单场景通过：new-api commit 4250c3443217b602819fb3e3d9b338390b165c1a；CI run 36261147113 与服务包 run 36261147118 通过并部署为 agent-flat-4250c34。真实网页查询返回 ast-grep 用途与 GitHub 来源，测试确认公开搜索不调用 OAuth 仓库 API；仍需纳入多模型和搜索类别回归。",
-    "github_oauth_to_model_answer": "未通过验收；OAuth 卡片状态不能替代实际读取和回答证据。",
-    "attachment_to_model_answer": "未通过验收。",
-    "two_account_isolation": "未通过验收。",
-    "device_independence": "初步通过：A7A 离线时普通网页聊天仍可用；需加入自动化验收。"
-  },
-  "constraints": [
-    "访客可以受限试用；跨设备历史、私有连接和付费权益绑定登录账户。",
-    "普通聊天、公开搜索和网站 GitHub OAuth 不依赖个人设备在线。",
-    "Radxa A7A 只属于站点所有者，是可选私有设备，不是共享后端。",
-    "New API 保留为模型网关；DSH 作为目标对话与工具循环，通过受保护入口渐进迁移。",
-    "浏览器 JS/Worker/WASM 用于合适的客户端工作，不绕过 CORS 或代替操作系统 CLI。",
-    "积分、管理员赠送、用量、扣费与退款进入统一可审计账本；知识空间配额由服务端强制执行。",
-    "所有构建和自动化测试只在 GitHub Actions 运行；CI 未通过不部署。"
-  ],
-  "tasks": [
     {
-      "id": "P0-1",
-      "priority": 0,
-      "title": "修复对话轮次、上下文与模型错误处理",
-      "owner": "Conversation runtime",
-      "depends_on": ["P0-3"],
-      "scope": "每轮关联、失败回合状态、正常问答路由、限流/上游/网络/容量错误分类和安全重试。",
-      "acceptance": [
-        "问候、DeepSeek 常识问题、短追问、纠正上一轮和先前工具失败后的新问题，不答非所问。",
-        "普通对话在所有本人设备离线时仍调用网站模型并完成。",
-        "有副作用的工具调用不会因重试而重复执行。",
-        "Actions 回归能关联真实模型请求；不以硬编码回复作为成功证据。"
+      "decision": "DSH 是唯一对话、上下文和工具循环；New API 保持模型网关；Lain42 账户、授权、额度、账本与数据所有权是业务真值。",
+      "rationale": "减少重复 Agent 循环和前端编排，渐进迁移以避免大爆炸切换；DSH 的现有能力不等于已完成 Lain42 多租户接入。",
+      "alternatives_considered": [
+        "继续把所有工具与对话编排加到 New API 前端循环，短期改动小但长期重复和耦合持续增加。",
+        "整站重写为 Rust/WASM 或把 ZeroStack 变成默认循环，改动风险大且不直接解决账号隔离和回答闭环。"
       ]
     },
     {
-      "id": "P0-2",
-      "priority": 0,
-      "title": "打通搜索、URL 与 GitHub OAuth 到模型回答",
-      "owner": "Tool adapters",
-      "depends_on": ["P0-1", "P0-3"],
-      "scope": "统一工具调用事件与结果回流；Web 搜索、受限 WebFetch、网站 GitHub OAuth。",
-      "acceptance": [
-        "用户在聊天中要求搜索或粘贴 URL 后，工具返回的实际内容进入当前模型轮次，回答附可打开来源。",
-        "OAuth 已连接时能列出当前用户授权的仓库；失败时显示实际 OAuth/API 错误，不要求 gh 登录。",
-        "本机 gh 只在用户明确选择本人设备执行时使用。",
-        "搜索或网页读取受限时说明原因，不拿无关结果充数，也不发送浏览器 Cookie。"
+      "decision": "身份在 Lain42 已认证服务端推导，并以短期、限定受众和能力的服务凭证传给 DSH；DSH 的会话、事件、工具调用和持久对象必须归属于该主体。",
+      "rationale": "阻止客户端伪造用户身份，避免跨账户资源访问；OAuth 凭据只留在加密凭据模块。",
+      "alternatives_considered": [
+        "只在浏览器传 userId/workspaceId，不能作为授权依据。",
+        "把网站 OAuth token 或 New API 管理员密钥发送给浏览器或模型，禁止。"
       ]
     },
     {
-      "id": "P0-4",
-      "priority": 0,
-      "title": "打通用户选择附件到模型分析的完整流程",
-      "owner": "Web client and conversation runtime",
-      "depends_on": ["P0-1", "P0-3"],
-      "scope": "浏览器本地预览/解析、发送范围确认、模型附件传递、取消与失败恢复。",
-      "acceptance": [
-        "文件由用户显式选择；发送前显示解析摘要和实际将发给模型的内容范围。",
-        "用户确认后模型能引用文件实际内容作答；未确认的文件不进入模型请求。",
-        "大小限制、取消和失败反馈可用；重试不会重复附加或重复扣费。",
-        "文件及解析结果按账号隔离；客户端解析使用 Worker/按需 WASM，不阻塞输入。"
-      ]
-    },
-    {
-      "id": "P0-3",
-      "priority": 0,
-      "title": "完成账户、凭据、会话、文件与设备所有权隔离",
-      "owner": "Identity and persistence",
-      "depends_on": [],
-      "scope": "服务端授权和浏览器本地存储的账号命名空间；匿名访客与登录账号分离。",
-      "acceptance": [
-        "两个测试账号互相不能读取会话、连接凭据、附件、设备、知识对象或用量记录。",
-        "撤销 OAuth 后该账号后续访问立即失效；令牌不会进入模型上下文或日志。",
-        "客户端不能通过修改 userId 或 workspaceId 访问他人资源。",
-        "Actions 隔离测试通过。"
-      ]
-    },
-    {
-      "id": "P1-1",
-      "priority": 1,
-      "title": "完善客户端代码展示与解析性能",
-      "owner": "Web client",
-      "depends_on": ["P0-1"],
-      "scope": "Markdown、语言标识、按需语法高亮、长内容性能和客户端解析体验。",
-      "acceptance": [
-        "Rust、JSON 和 Markdown 代码块在客户端正确显示、高亮和复制。",
-        "重型语言包不进入首屏资源；长代码块渲染不阻塞输入。"
-      ]
-    },
-    {
-      "id": "P1-2",
-      "priority": 1,
-      "title": "让 CLI/MCP 只在用户本人设备受控执行",
-      "owner": "Device execution",
-      "depends_on": ["P0-3"],
-      "scope": "用户选择的配对设备、允许目录、读写审批、断线状态与幂等恢复。",
-      "acceptance": [
-        "设备离线不影响 Web 对话、搜索或网站 OAuth。",
-        "任务只可由所有者选择的设备执行，其他账号不可枚举或调用。",
-        "写操作需要确认；撤销设备后新调用失败；不盲目重放结果不明的副作用。",
-        "不使用站点所有者的 Radxa A7A 作为其他用户的执行节点。"
-      ]
-    },
-    {
-      "id": "P1-3",
-      "priority": 1,
-      "title": "统一积分账本、管理员赠送与模型用量核算",
-      "owner": "Billing and entitlements",
-      "depends_on": ["P0-3"],
-      "scope": "充值、管理员赠送、预留、扣费、退款、New API 用量映射和管理审计。",
-      "acceptance": [
-        "同一请求重复回调不会重复入账或扣费。",
-        "用户可查看积分来源和用量；管理员发放有操作者、对象、原因和时间记录。",
-        "模型渠道余额不作为用户积分的第二个事实来源。"
-      ]
-    },
-    {
-      "id": "P2-1",
-      "priority": 2,
-      "title": "提供私有 Pin 知识空间与 5/20 GB 配额",
-      "owner": "Knowledge storage",
-      "depends_on": ["P0-3", "P1-3"],
-      "scope": "私有 OSS 对象、元数据、索引、并发配额、版本替换、删除和会员额度。",
-      "acceptance": [
-        "普通用户上限 5 GB，会员上限 20 GB；并发上传也不能超额。",
-        "用户只能读取自己的对象；短期授权过期后不可继续访问。",
-        "替换和删除能正确释放配额；重建索引不会丢失对象所有权。"
-      ]
-    },
-    {
-      "id": "P2-2",
-      "priority": 2,
-      "title": "发布共享 Web 体验的桌面与扩展连接器",
-      "owner": "Client platforms",
-      "depends_on": ["P1-1", "P1-2", "P1-3"],
-      "scope": "Tauri 入口及后续邮件/即时通信连接器；复用同一授权、会话和审批规则。",
-      "acceptance": [
-        "桌面端不暴露任意 shell 权限，并复用 Web 的授权协议。",
-        "新连接器先支持只读或草稿；发送功能需单独启用并有明确审批。"
+      "decision": "先通过隐藏且受保护的入口渐进迁移，按测试账号切流；所有构建和测试使用 GitHub Actions。",
+      "rationale": "线上 New API 路径继续服务，DSH 多租户安全和端到端闭环未证明之前保留回滚。",
+      "alternatives_considered": [
+        "一次性替换现有生产 Agent，回滚和故障定位风险过高。",
+        "本地构建或将个人 Radxa A7A 当作公共测试后端，违反用户约束。"
       ]
     }
   ],
-  "release_gate": [
-    "P0 必须一次性通过真实多轮聊天、搜索/URL/GitHub OAuth→模型回答、附件→模型分析三条端到端流程及双账号隔离验收。",
-    "每个阶段先由 GitHub Actions 自动化测试，再进行真实浏览器流程验收。",
-    "P0 通过前不把新对话入口切为默认入口；维持可回滚路径。",
-    "没有实际事件、来源或隔离证据时，不宣称功能完成。"
+  "current_evidence": {
+    "production": "2026-09-27 只读检查 api.lain42.top/api/status 返回 HTTP 200，线上版本为 agent-4f9032e。",
+    "latest_oauth_error_fix": "new-api fork commit 4ce049d；CI run 36266397255 成功；Agent Server 构建 run 36266397319 成功；未部署。",
+    "oauth_credential_isolation": "New API 有每用户加密 GitHub 凭据隔离控制器回归，CI run 36265731528 成功；该证据不等于全站会话、文件、设备、知识或用量隔离。",
+    "public_search_and_url": "各有一次真实线上资料回流模型并给出来源的记录；没有证明 DSH 已接管，需加入自动化与浏览器放行矩阵。",
+    "attachments": "存在客户端预览与确认 UI；尚无完整确认后模型基于合成文件实际内容作答的浏览器证据。",
+    "dsh_integration": "DSH 有 Agent loop、会话控制器和事件流；New API 仍是生产聊天入口，Lain42 身份映射、New API 模型适配和租户隔离连接未完成。"
+  },
+  "tasks": [
+    {
+      "id": "p0-1",
+      "agent": "architecture",
+      "title": "冻结 New API 到 DSH 的身份、会话和事件契约",
+      "description": "审计现有 New API 登录/额度调用与 DSH SessionController、Agent loop、事件协议。规定已验证主体映射、会话所有权、短期服务身份、请求幂等、流事件序号、工具执行位置和回滚入口。接口路径仅在核对现有代码后确定。",
+      "priority": 1,
+      "dependencies": [],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "文档列出身份信任边界、New API 与 DSH 的唯一数据真值、事件关联字段和失败语义。",
+        "明确浏览器不能提交可被服务端直接信任的主体 ID，也不接收内部服务密钥。",
+        "给出迁移和回滚路径；未通过租户隔离前 DSH 入口仅限测试账号。",
+        "服务协议不要求将站点所有者 A7A、共享管理员 shell 或任意 MCP server 暴露给普通用户。"
+      ],
+      "artifacts_expected": [
+        ".agents/results/architecture/architecture-recommendation-lain42-platform.md",
+        ".agents/results/plan/lain42-agent-goal-2026-09-26.md"
+      ],
+      "scope": [
+        "packages/api/session-controller/",
+        "packages/core/agent-loop/",
+        "controller/",
+        "web/src/features/agent/"
+      ]
+    },
+    {
+      "id": "p0-2",
+      "agent": "qa",
+      "title": "建立多租户和会话契约回归",
+      "description": "基于 P0-1 契约建立伪造主体、跨账号 sessionId、跨账户 GitHub credential、重复 turn request、迟到/失序事件及撤销授权的测试矩阵。使用合成账号与模拟上游。",
+      "priority": 1,
+      "dependencies": [],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "两个测试主体不能互读会话、OAuth 凭据、文件、设备、知识对象或用量。",
+        "修改客户端 userId/workspaceId 不会改变服务端授权主体。",
+        "撤销 OAuth 后后续请求立即失效；密钥和令牌不出现在断言输出或日志。",
+        "重复请求不会重复执行有副作用的工具；失序事件不会覆盖新的会话状态。",
+        "测试由 GitHub Actions 执行，不能用本机项目测试替代。"
+      ],
+      "artifacts_expected": [
+        "GitHub Actions run URL",
+        "双账号隔离矩阵"
+      ],
+      "scope": [
+        "controller/",
+        "model/",
+        "packages/api/session-controller/",
+        "apps/web/tests/"
+      ]
+    },
+    {
+      "id": "p0-3",
+      "agent": "backend",
+      "title": "增加受保护的 DSH 会话桥和网站模型适配",
+      "description": "在不替换现有默认入口的前提下，为登录态用户提供隐藏测试入口。服务端验证 Lain42 身份与权益，创建带主体归属的 DSH 会话；DSH 经服务端适配调用 New API；持久化和流事件按 P0-1 契约实现。",
+      "priority": 2,
+      "dependencies": [
+        "p0-1",
+        "p0-2"
+      ],
+      "estimated_complexity": "very-high",
+      "acceptance_criteria": [
+        "浏览器 API 不暴露 New API 管理员密钥或 OAuth token。",
+        "会话流可通过事件号续接，取消和重连不会自动重跑旧轮。",
+        "每一轮仅由 DSH 持有并驱动，不与旧前端 loop 双重执行。",
+        "测试租户之间的数据和模型请求关联隔离，额度仍由 Lain42/New API 既有真值提供。",
+        "Actions 构建和契约测试通过；生产默认入口保持不变。"
+      ],
+      "artifacts_expected": [
+        "受保护测试入口",
+        "GitHub Actions run URL"
+      ],
+      "scope": [
+        "controller/",
+        "middleware/",
+        "model/",
+        "packages/api/session-controller/",
+        "packages/api/gateway/"
+      ]
+    },
+    {
+      "id": "p0-4",
+      "agent": "debug",
+      "title": "验证 DSH 多轮语义和模型错误恢复",
+      "description": "在 DSH 网站模型路径上复现历史错答、429、上游 5xx、推理断线、容量不足和工具失败污染；让错误按类别成为本轮结果，不让普通问候或 DeepSeek 常识被宽泛关键词路由到搜索。",
+      "priority": 3,
+      "dependencies": [
+        "p0-3"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "问候、常识问题、短追问、纠正以及上一轮工具失败后的新问题分别回答当前意图。",
+        "无个人设备在线仍通过网站模型完成普通对话。",
+        "只对尚未输出且无副作用的请求有限重试；未知工具结果不自动重放。",
+        "失败信息可理解，真实模型调用被记录为测试证据而不是硬编码问候。",
+        "重复回归与多模型测试在 GitHub Actions 通过；延迟长尾有测量记录。"
+      ],
+      "artifacts_expected": [
+        "对话回归集",
+        "GitHub Actions run URL"
+      ],
+      "scope": [
+        "packages/core/agent-loop/",
+        "packages/api/session-controller/",
+        "web/src/features/agent/"
+      ]
+    },
+    {
+      "id": "p0-5",
+      "agent": "backend",
+      "title": "打通搜索、URL 和 GitHub OAuth 的 DSH 工具循环",
+      "description": "将公开搜索、受限网页读取和当前用户 OAuth GitHub 查询作为明确声明权限的工具接入 DSH。工具结果携带来源和状态，返回同一轮模型继续回答；授权拒绝或上游失败转为结构化工具结果，不崩溃、不编造。",
+      "priority": 3,
+      "dependencies": [
+        "p0-3",
+        "p0-4"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "真实浏览器的搜索、公开 URL 和 OAuth 仓库查询都把实际返回内容交给当前模型，并给出可打开来源。",
+        "GitHub OAuth 与本机 gh 独立；使用当前登录用户凭据，不向模型传 token。",
+        "OAuth 401、403、429 有准确的重连/权限/限流提示；拒绝只读工具不会变成整轮通用崩溃。",
+        "WebFetch 限制重定向、内网地址和响应大小；遵守客户端-only选择与 CORS 限制。",
+        "无需个人设备在线；自动化用模拟上游，手工浏览器使用专用测试账号。"
+      ],
+      "artifacts_expected": [
+        "搜索、URL、OAuth 回归记录",
+        "GitHub Actions run URL"
+      ],
+      "scope": [
+        "controller/agent_tools.go",
+        "controller/agent_tools_test.go",
+        "web/src/features/agent/"
+      ]
+    },
+    {
+      "id": "p0-6",
+      "agent": "frontend",
+      "title": "完成用户确认附件到 DSH 模型回答的闭环",
+      "description": "在测试入口复用浏览器本地预览和解析能力。发送前列出文件名、解析结果和发送范围；确认后把所需内容交给当前 DSH 轮次。Pin 与本轮附件分开，未 Pin 不持久上传。",
+      "priority": 3,
+      "dependencies": [
+        "p0-3",
+        "p0-4"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "使用合成文本/PDF/图像样例，模型回答能引用只在附件内出现的正确内容。",
+        "取消或未确认时没有附件内容离开客户端；用户可看懂将发送的内容范围。",
+        "超限、解析失败、网络中断、重连与重试有明确状态，不重复提交或扣费。",
+        "CPU 密集解析运行在 Worker 或经过证据选择的 WASM，不阻塞输入。",
+        "附件所有权测试证明用户之间不可读取。"
+      ],
+      "artifacts_expected": [
+        "附件浏览器验收记录",
+        "GitHub Actions run URL"
+      ],
+      "scope": [
+        "web/src/features/agent/",
+        "web/src/features/playground/"
+      ]
+    },
+    {
+      "id": "p0-7",
+      "agent": "qa",
+      "title": "执行 P0 双用户、设备离线和发布放行矩阵",
+      "description": "组合自动化与真实浏览器流程，验证 DSH 入口的聊天、搜索、URL、OAuth、附件和数据隔离。通过测试账号分阶段切流并记录回滚证据；不要使用站点所有者的 A7A 充当公共节点。",
+      "priority": 4,
+      "dependencies": [
+        "p0-2",
+        "p0-4",
+        "p0-5",
+        "p0-6"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "两测试账号不能跨读会话、OAuth、附件、设备、知识和用量。",
+        "关闭所有个人设备后，聊天、公开搜索、URL 与网站 OAuth 流程仍通过。",
+        "真实浏览器完成 P0 用户流程；来源可打开，授权撤销即时生效。",
+        "Actions 测试通过并记录 commit、run、测试账号类型、浏览器结果与限制。",
+        "通过前不切换生产默认入口；通过后有逐账号切换和可立即回滚的方案。"
+      ],
+      "artifacts_expected": [
+        "P0 浏览器验收矩阵",
+        "GitHub Actions run URL",
+        "切流与回滚记录"
+      ],
+      "scope": [
+        "apps/web/tests/",
+        "web/src/features/agent/",
+        ".agents/results/"
+      ]
+    },
+    {
+      "id": "p1-1",
+      "agent": "backend",
+      "title": "完善本人设备 CLI/MCP 执行",
+      "description": "P0 放行后支持用户明确选择的私有桌面或无头设备；最小权限、目录 allowlist、写入审批、撤销和可恢复状态；保持浏览器与服务端身份分离。",
+      "priority": 5,
+      "dependencies": [
+        "p0-7"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "仅设备所有者可调用、枚举和撤销设备；A7A 仅归站点所有者私人使用。",
+        "写操作需用户确认，未知副作用不会被自动重放。",
+        "设备离线不影响任何 P0 功能；双账号设备隔离 Actions 测试通过。"
+      ],
+      "artifacts_expected": [
+        "设备授权与撤销验收记录"
+      ],
+      "scope": [
+        "controller/",
+        "packages/api/session-controller/",
+        "apps/"
+      ]
+    },
+    {
+      "id": "p1-2",
+      "agent": "db",
+      "title": "统一积分、赠送、用量与退款账本",
+      "description": "审计现有充值和 New API 用量真值后扩展同一可审计账本；区分充值、管理员赠送、预留、消费和退款；同一业务 requestId 幂等。",
+      "priority": 5,
+      "dependencies": [
+        "p0-7"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "并发重复回调不会重复发放或扣款；额度预留与结算可对账。",
+        "管理员发放记录操作者、账户、数量、原因和时间，不能伪装成付款。",
+        "用户看到的积分只有一个事实来源，并能追溯模型用量。",
+        "数据库迁移、并发和回滚测试在 GitHub Actions 通过。"
+      ],
+      "artifacts_expected": [
+        "账本数据模型与迁移",
+        "用量对账 Actions 记录"
+      ],
+      "scope": [
+        "model/",
+        "controller/",
+        "middleware/",
+        "web/src/"
+      ]
+    },
+    {
+      "id": "p1-3",
+      "agent": "frontend",
+      "title": "完成手机体验与客户端代码展示",
+      "description": "打磨响应式输入、附件、取消、重连和来源浏览；按需加载常见语言包，提供代码语言名称、高亮和复制。先使用现有客户端渲染组件。",
+      "priority": 5,
+      "dependencies": [
+        "p0-7"
+      ],
+      "estimated_complexity": "medium",
+      "acceptance_criteria": [
+        "Android 手机浏览器完成聊天、附件确认、取消、重连和来源查看。",
+        "Rust、JSON、Markdown 代码块正确识别、高亮、复制；长代码不阻塞输入。",
+        "首屏包未包含全部语言运行时；浏览器回归在 GitHub Actions 通过。"
+      ],
+      "artifacts_expected": [
+        "移动浏览器验收记录",
+        "客户端 bundle size 对比"
+      ],
+      "scope": [
+        "web/src/features/agent/",
+        "web/src/features/playground/"
+      ]
+    },
+    {
+      "id": "p2-1",
+      "agent": "db",
+      "title": "实现私有 Pin 知识空间与 5/20 GB 配额",
+      "description": "复用账号权益真值，在私有 OSS 保存用户主动 Pin 的内容；数据库维护对象归属、字节数、版本、索引状态和配额预留。",
+      "priority": 6,
+      "dependencies": [
+        "p0-7",
+        "p1-2"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "普通用户 5 GB、会员 20 GB；并发上传也不能超过额度。",
+        "对象为私有；跨账号读取拒绝；替换和删除正确释放空间。",
+        "索引可重建而不丢失所有权；OSS 授权短期且不出现在模型提示或日志。",
+        "配额并发与删除测试在 GitHub Actions 通过。"
+      ],
+      "artifacts_expected": [
+        "知识对象与配额 schema",
+        "并发配额 Actions 记录"
+      ],
+      "scope": [
+        "model/",
+        "controller/",
+        "web/src/"
+      ]
+    },
+    {
+      "id": "p2-2",
+      "agent": "mobile",
+      "title": "发布复用 Web 授权的 Tauri 入口",
+      "description": "待 Web 主流程稳定后，将 Tauri 作为可选安装入口；不为远程网页授予任意本机 shell 权限，设备操作复用既有本人授权协议。",
+      "priority": 6,
+      "dependencies": [
+        "p0-7",
+        "p1-1",
+        "p1-3"
+      ],
+      "estimated_complexity": "high",
+      "acceptance_criteria": [
+        "桌面端复用相同账户、会话、权益和审批；不维护第二套产品业务。",
+        "远程网页无法直接访问任意文件或命令执行接口。",
+        "平台包由 GitHub Actions 构建；平台支持按实际产物报告。"
+      ],
+      "artifacts_expected": [
+        "桌面平台 Actions 产物",
+        "桌面授权安全验收"
+      ],
+      "scope": [
+        "apps/",
+        "packages/"
+      ]
+    }
   ],
-  "supersedes": "architecture-recommendation-lain42-platform.md 中的初始阶段建议，以本文件的目标优先级和验收标准作为当前执行计划。"
+  "proposed_api_contracts": [
+    {
+      "endpoint": "Lain42 已认证的会话创建接口（路径待代码审计确定）",
+      "method": "POST",
+      "request": {
+        "clientRequestId": "幂等请求标识",
+        "mode": "assistant|code|research|content"
+      },
+      "response": {
+        "sessionId": "归属当前已认证账户的会话 ID"
+      },
+      "headers": {
+        "cookie": "现有网站认证会话；服务端确认主体"
+      }
+    },
+    {
+      "endpoint": "Lain42 已认证的轮次提交接口（路径待代码审计确定）",
+      "method": "POST",
+      "request": {
+        "sessionId": "服务端校验所有权",
+        "turnRequestId": "幂等请求标识",
+        "messages": "当前请求内容与用户已确认的附件部分"
+      },
+      "response": {
+        "turnId": "单轮执行 ID",
+        "runId": "DSH 执行关联 ID"
+      },
+      "headers": {
+        "cookie": "现有网站认证会话；不接受浏览器传来的服务主体声明"
+      }
+    },
+    {
+      "endpoint": "Lain42 已认证的会话事件流（路径待代码审计确定）",
+      "method": "GET",
+      "request": {
+        "sessionId": "服务端校验所有权",
+        "afterSequence": "断线续接的最后事件序号"
+      },
+      "response": {
+        "events": "带 sessionId、turnId、runId、sequence 和状态类型的有序事件"
+      },
+      "headers": {
+        "cookie": "现有网站认证会话"
+      }
+    }
+  ],
+  "logical_data_models": [
+    {
+      "entity": "AgentPrincipal",
+      "fields": {
+        "userId": "由 New API/Lain42 服务端认证会话导出",
+        "workspaceId": "服务端确定且经授权",
+        "entitlementSnapshot": "只用于当前请求的经验证权限"
+      }
+    },
+    {
+      "entity": "AgentRun",
+      "fields": {
+        "sessionId": "所有者命名空间内唯一",
+        "turnId": "用户轮次关联",
+        "runId": "DSH 执行关联",
+        "requestId": "幂等键",
+        "ownerId": "服务端授权主体",
+        "lastSequence": "事件续接位置"
+      }
+    },
+    {
+      "entity": "ToolInvocation",
+      "fields": {
+        "toolCallId": "单个工具调用 ID",
+        "ownerId": "执行者及数据所有者",
+        "executionLocation": "server|browser|user-device",
+        "permission": "显式声明的只读/写入能力",
+        "status": "queued|running|succeeded|denied|failed|unknown"
+      }
+    }
+  ],
+  "non_functional_requirements": {
+    "security": [
+      "禁止将 OAuth token、API key、附件全文写入日志或模型系统提示词。",
+      "按账户授权每次读取；所有工具参数服务端验证；浏览器提交主体字段不可信。",
+      "WebFetch 限制内网地址、重定向和响应大小；客户端 CORS 失败必须如实报告。",
+      "不将管理员主机、Radxa A7A 或共享 shell 暴露给普通用户。"
+    ],
+    "performance": [
+      "分别测量浏览器首屏/交互、服务端空闲与并发资源、设备任务峰值。",
+      "流式事件可续接；重连不重新执行已提交工具。",
+      "大型语言高亮和文件解析按需/在 Worker 执行。"
+    ],
+    "scalability": [
+      "P0 优先模块化单体与可替换适配器，不因架构图把每个组件拆成微服务。",
+      "多租户隔离、积分账本和文件配额由服务端执行。",
+      "DSH/ZeroStack 运行资源需以真实并发基准测量后再决定是否扩展。"
+    ]
+  },
+  "testing_strategy": {
+    "unit_tests": "工具适配器、结构化上游错误、轮次状态和模型请求策略；GitHub Actions。",
+    "integration_tests": "伪造主体、跨账户资源、OAuth 撤销、事件续接、重复工具调用、New API provider bridge；GitHub Actions。",
+    "e2e_tests": "合成用户和资料完成对话、搜索/URL/OAuth、附件的真实浏览器流程；账号双向隔离；手工浏览器证据随 release gate 归档。",
+    "performance_tests": "固定依赖与任务测客户端资源、服务器空闲/并发 RSS、长流与断线恢复；不以 mock 工具结果代替质量测试。"
+  },
+  "project_controls": {
+    "iso_21500": {
+      "scope_defined": true,
+      "stakeholders_identified": [
+        "Lain42 站点所有者/经营者",
+        "匿名访客与登录用户",
+        "本人设备所有者"
+      ],
+      "dependencies_mapped": true
+    },
+    "iso_31000": {
+      "top_risks": [
+        "DSH 服务主体或会话映射设计错误导致跨账户访问。",
+        "旧、新对话循环同时运行导致重复工具副作用或双重扣费。",
+        "弱模型将工具结果或历史上下文混淆，造成牛头不对马嘴。",
+        "OAuth 状态显示已连接但真实请求失败，用户被错误指引登录本机 gh。",
+        "个人 A7A 被误配置成所有用户共享后端。"
+      ],
+      "treatments": [
+        "先定义服务端主体信任边界；双账号攻击用例未通过前只对测试账号开放。",
+        "单轮唯一控制者、幂等 requestId 和可回滚切换；不双写副作用。",
+        "每轮与工具有稳定 ID；工具失败结构化回流；真实模型质量回归。",
+        "展示实际 OAuth 上游错误；隔离网站 OAuth 与设备 gh。",
+        "设备所有权校验和离线测试不依赖 A7A。"
+      ]
+    },
+    "iso_38500": {
+      "decision_owner": "用户作为 Lain42 经营者；技术执行由当前 Agent 负责",
+      "approval_required_for": [
+        "生产入口切换和正式部署",
+        "改变充值、积分、会员或知识空间配额规则"
+      ]
+    }
+  },
+  "release_gate": [
+    "P0-1 至 P0-7 所有契约、Actions 和浏览器验收证据齐全。",
+    "双账号无法跨读会话、OAuth、附件、设备、知识或用量。",
+    "所有个人设备离线时普通聊天、搜索、URL 和网站 GitHub OAuth仍通过。",
+    "P0 通过前不切换生产默认对话入口；所有切换均能回滚且不双扣费。",
+    "构建与自动化测试只在 GitHub Actions；未部署版本标注为未部署。"
+  ],
+  "deferred": [
+    "公开算力出租和站点所有者 A7A 作为共享 worker。",
+    "自动发送邮件/QQ/微信/Telegram。",
+    "ZeroStack 多 Agent 委派、独立桌面业务系统、整站 Rust/WASM 重写。",
+    "未由性能或隐私证据支持的重型编译器/索引工具默认下载。"
+  ]
 }
