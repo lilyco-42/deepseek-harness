@@ -41,6 +41,9 @@ class MockGateway:
     def __init__(self) -> None:
         self.model_requests: list[dict[str, Any]] = []
         self.chat_requests: list[dict[str, Any]] = []
+        self.write_target: str | None = None
+        self.write_call_emitted = False
+        self.write_tool_advertised = False
         gateway = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -101,14 +104,31 @@ class MockGateway:
                     self.send_header("Cache-Control", "no-cache")
                     self.send_header("Connection", "close")
                     self.end_headers()
-                    frames = (
-                        {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
-                         "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]},
-                        {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
-                         "choices": [{"index": 0, "delta": {"content": MOCK_REPLY}, "finish_reason": None}]},
-                        {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
-                         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-                    )
+                    first = {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+                    if gateway.write_target and not gateway.write_call_emitted:
+                        available = [tool.get("function", {}).get("name") for tool in payload.get("tools", [])]
+                        gateway.write_tool_advertised = "write" in available
+                        gateway.write_call_emitted = True
+                        write_args = json.dumps({"path": gateway.write_target, "content": "must not exist"})
+                        frames = (
+                            first,
+                            {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                             "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0,
+                                "id": "call_ci_write", "type": "function",
+                                "function": {"name": "write", "arguments": write_args}}]},
+                                "finish_reason": None}]},
+                            {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                             "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+                        )
+                    else:
+                        frames = (
+                            first,
+                            {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                             "choices": [{"index": 0, "delta": {"content": MOCK_REPLY}, "finish_reason": None}]},
+                            {"id": "mock", "object": "chat.completion.chunk", "model": MOCK_MODEL,
+                             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                        )
                     for frame in frames:
                         self.wfile.write(f"data: {json.dumps(frame)}\n\n".encode("utf-8"))
                         self.wfile.flush()
@@ -261,6 +281,88 @@ def sample_resident_kib(pid: int) -> list[int]:
             samples.append(rss)
         time.sleep(SAMPLE_INTERVAL_SECONDS)
     return samples
+
+
+def verify_unapproved_write_is_denied(gateway: MockGateway, root: Path) -> None:
+    """Make the mock model call write through real ACP; no file may appear."""
+    workspace = root / "permission-workspace"
+    config_dir = root / "permission-config"
+    workspace.mkdir()
+    config_dir.mkdir()
+    target = workspace / "unapproved-write.txt"
+    (config_dir / "config.toml").write_text(
+        "\n".join(
+            (
+                'provider = "lain42-ci"',
+                f'model = "{MOCK_MODEL}"',
+                'default_permission_mode = "guarded"',
+                "no_tools = false",
+                "",
+                "[custom_providers.lain42-ci]",
+                'provider_type = "openai"',
+                f'base_url = "{gateway.base_url}"',
+                'api_key_env = "LAIN42_MOCK_API_KEY"',
+                'api_style = "completions"',
+                f'model = "{MOCK_MODEL}"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    gateway.write_target = str(target)
+    gateway.write_call_emitted = False
+    gateway.write_tool_advertised = False
+    environment = os.environ.copy()
+    environment["ZS_CONFIG_DIR"] = str(config_dir)
+    environment["LAIN42_MOCK_API_KEY"] = MOCK_API_KEY
+    output_lines: queue.Queue[str | None] = queue.Queue()
+    stderr_tail: deque[str] = deque(maxlen=40)
+    process = subprocess.Popen(
+        [str(ZERO_STACK), "--acp"],
+        cwd=workspace,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        bufsize=1,
+    )
+    threading.Thread(target=read_stdout, args=(process, output_lines), daemon=True).start()
+    threading.Thread(target=read_stderr, args=(process, stderr_tail), daemon=True).start()
+    try:
+        request(process, output_lines, 11, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+        session = request(process, output_lines, 12, "session/new", {"cwd": str(workspace), "mcpServers": []})
+        session_id = session.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise RuntimeError("ZeroStack ACP returned no sessionId in write-denial probe")
+        notifications: list[dict[str, Any]] = []
+        request(
+            process, output_lines, 13, "session/prompt",
+            {"sessionId": session_id, "prompt": [{"type": "text", "text": "CI write-denial probe"}]},
+            notifications,
+        )
+        if not gateway.write_call_emitted or not gateway.write_tool_advertised:
+            raise RuntimeError("The mock model did not exercise ZeroStack's advertised write tool")
+        if target.exists():
+            raise RuntimeError("ZeroStack ACP created a file without client approval")
+        observed = json.dumps(notifications, ensure_ascii=False).lower()
+        logs = "\n".join(stderr_tail).lower()
+        if "write" not in observed or not any(
+            marker in observed or marker in logs
+            for marker in ("denied", "permission", "unapproved tool call")
+        ):
+            raise RuntimeError("The ACP write attempt did not produce a permission-denial trace")
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+            raise RuntimeError("ZeroStack ACP write-denial probe did not stop") from None
+        gateway.write_target = None
 
 
 def acp_permission_posture() -> str:
@@ -477,6 +579,12 @@ def main() -> None:
                     f"ZeroStack ACP exited with code {process.returncode}"
                     + (f"\n{details}" if details else "")
                 )
+            if PROFILE == "acp-only":
+                verify_unapproved_write_is_denied(gateway, Path(root))
+                print("ACP mock-model write attempt: denied without client approval")
+                if summary_path:
+                    with open(summary_path, "a", encoding="utf-8") as summary_file:
+                        summary_file.write("- ACP mock-model write attempt: denied without client approval\n")
     finally:
         gateway.stop()
 
