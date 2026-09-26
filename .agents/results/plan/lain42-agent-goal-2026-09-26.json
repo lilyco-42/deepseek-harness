@@ -12,7 +12,7 @@
   ],
   "next_acceptance_gate": "在新增外围功能前，完成真实多轮聊天、公开搜索/URL/GitHub OAuth 到同轮模型回答、确认后的附件分析、双账号数据隔离；个人设备离线时前三项仍可用。",
   "evidence_status": {
-    "conversation_continuity": "部分通过：Actions 和真实浏览器抽查完成；需纳入多模型回归。",
+    "conversation_continuity": "单场景语义通过但整体未通过：new-api commit 4f9032e；CI run 36263767947、服务包 run 36263767975 均通过并部署 agent-flat-4f9032e。默认模型实测你好→刚才不是只问了个问好，能承认没接好并继续询问，设备离线且未调工具；耗时 30.16 秒。仍需多模型/重复回归并调查延迟长尾。",
     "public_url_to_model_answer": "单场景通过：线上读取 ast-grep README 并生成带来源摘要；需纳入流程回归。",
     "public_search_to_model_answer": "单场景通过：new-api commit 4250c3443217b602819fb3e3d9b338390b165c1a；CI run 36261147113 与服务包 run 36261147118 通过并部署为 agent-flat-4250c34。真实网页查询返回 ast-grep 用途与 GitHub 来源，测试确认公开搜索不调用 OAuth 仓库 API；仍需纳入多模型和搜索类别回归。",
     "github_oauth_to_model_answer": "未通过验收；OAuth 卡片状态不能替代实际读取和回答证据。",
