@@ -272,6 +272,11 @@ def acp_permission_posture() -> str:
     permission_implementation = source[start:end]
     if "UserDecision::AllowOnce" in permission_implementation:
         return "VERIFIED UNSAFE: ACP automatically approves Ask permissions"
+    if (
+        "ACP denying unapproved tool call" in permission_implementation
+        and "UserDecision::Deny" in permission_implementation
+    ):
+        return "VERIFIED ASK DENIAL: ACP rejects Ask without client approval"
     return "NOT VERIFIED (requires review of the changed permission implementation)"
 
 

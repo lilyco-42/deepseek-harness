@@ -3,6 +3,7 @@ name: ZeroStack compatibility
 on:
   pull_request:
     paths:
+      - '.github/scripts/patch-zerostack-acp.py'
       - '.github/scripts/zerostack-acp-smoke.py'
       - '.github/workflows/zerostack-compatibility.yml'
   workflow_dispatch:
@@ -70,6 +71,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Deny unapproved ACP Ask operations in the pinned worker
+        run: python .github/scripts/patch-zerostack-acp.py
 
       - name: Install mold for Linux x64
         if: matrix.platform == 'linux-x64'
