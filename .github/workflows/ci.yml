@@ -381,11 +381,11 @@ jobs:
         id: consumers
         run: pnpm run check:ci:consumers
 
-      - name: Record ACP diagnostic session after a consumer failure
+      - name: Refresh ACP diagnostic session after a consumer failure
         if: failure() && steps.consumers.outcome == 'failure'
-        run: DSH_SNAPSHOT=record pnpm exec vitest run --config vitest.snapshot.config.ts --update snapshots/session/headless.snapshot.ts -t 'replays subagent-acp-diagnostic'
+        run: DSH_SNAPSHOT=refresh pnpm exec vitest run --config vitest.snapshot.config.ts --update snapshots/session/headless.snapshot.ts -t 'subagent-acp-diagnostic through dsh'
 
-      - name: Upload recorded ACP diagnostic session
+      - name: Upload refreshed ACP diagnostic session
         if: failure() && steps.consumers.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
