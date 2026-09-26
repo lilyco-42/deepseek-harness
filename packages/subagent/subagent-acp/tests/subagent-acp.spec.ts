@@ -1575,6 +1575,51 @@ describe('dsh-subagent-acp', () => {
     expect(result.diagnostic).toContain(expectedPermission('ask', 'edit', 'allowed'))
   })
 
+  it.each(['rejected', 'cancelled', 'unavailable', 'throws'] as const)(
+    'denies ACP operations when approval returns %s', async (outcome) => {
+      const requestApproval = vi.fn(async (): Promise<ApprovalOutcome> => {
+        if (outcome === 'throws') throw new Error('approval unavailable')
+        return outcome
+      })
+      const run = await startAcpRun(request(), {
+        command: process.execPath,
+        args: [mockServer],
+        cwd: process.cwd(),
+        permission: 'ask',
+        requestApproval,
+        env: { MOCK_PERMISSION: '1', MOCK_TOOL_KIND: 'edit', MOCK_STOP: 'max_turn_requests' },
+        disposeEofGraceMs: DEFAULT_DISPOSE_EOF_GRACE_MS,
+        disposeGraceMs: DEFAULT_DISPOSE_GRACE_MS,
+        spawn: spawnSubprocess,
+      })
+      try {
+        const result = await run.result
+        expect(requestApproval).toHaveBeenCalledTimes(1)
+        expect(result.diagnostic).toContain(expectedPermission('ask', 'edit', 'denied'))
+        expect(result.diagnostic).not.toContain('decision: allowed')
+      } finally {
+        await run.dispose()
+      }
+    },
+  )
+
+  it('describes an unspecified ACP operation to the parent without granting it', async () => {
+    const ctx = await setup({ MOCK_PERMISSION: '1', MOCK_STOP: 'max_turn_requests' }, 'ask', true)
+    const reasons: Array<string | undefined> = []
+    ctx.on('approval/request', (approval) => {
+      reasons.push(approval.reason)
+      return Promise.resolve<ApprovalOutcome>('rejected')
+    })
+    const run = await ctx.subagents.start('acp', request())
+    try {
+      const result = await run.result
+      expect(reasons).toEqual(['The ACP worker requests permission to perform the requested operation.'])
+      expect(result.diagnostic).toContain(expectedPermission('ask', 'unknown', 'denied'))
+    } finally {
+      await run.dispose()
+    }
+  })
+
   it('fails closed when no parent approval service is available', async () => {
     const ctx = await setup({
       MOCK_PERMISSION: '1',
