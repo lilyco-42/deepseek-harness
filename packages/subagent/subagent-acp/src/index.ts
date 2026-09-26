@@ -172,16 +172,17 @@ class AcpProvider implements SubagentProvider {
       this.ctx.logger.warn(`subagent-acp "${this.name}": child start failed: %o`, error)
       throw failure
     }
+    const approval = this.ctx.get('approval')
     const spec: AcpRunSpec = {
       command: this.config.command,
       args: this.config.args,
       cwd,
       permission: this.config.permission,
-      ...(this.config.permission === 'ask' && this.ctx.approval !== undefined
+      ...(this.config.permission === 'ask' && approval !== undefined
         ? {
           requestApproval: (kind: ToolKind | 'unknown', signal: AbortSignal) => {
             const operation = kind === 'unknown' ? 'requested operation' : `${kind} operation`
-            return this.ctx.approval.request({
+            return approval.request({
               agent: request.parent,
               toolName: `ACP ${kind}`,
               reason: `The ACP worker requests permission to perform the ${operation}.`,

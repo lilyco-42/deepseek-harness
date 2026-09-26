@@ -173,10 +173,10 @@ function makeAgent() {
               { optionId: 'always', name: 'Allow for session', kind: 'allow_always' as const },
               { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
             ]
-          : [
-            { optionId: 'yes', name: 'Allow', kind: 'allow_once' as const },
-            { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
-          ]
+            : [
+              { optionId: 'yes', name: 'Allow', kind: 'allow_once' as const },
+              { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
+            ]
         const decision = await conn.request(methods.client.session.requestPermission, {
           sessionId: params.sessionId,
           toolCall: {

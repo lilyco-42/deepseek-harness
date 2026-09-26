@@ -1567,8 +1567,8 @@ describe('dsh-subagent-acp', () => {
       agent: fakeParent,
       toolName: 'ACP edit',
       reason: 'The ACP worker requests permission to perform the edit operation.',
-      signal: expect.any(AbortSignal),
     })
+    expect(approvalRequests[0]?.signal).toBeInstanceOf(AbortSignal)
     const parentEvents = parentSession.snapshotEvents()
     expect(parentEvents.slice(-2).map(event => event.type)).toEqual(['approval/asked', 'approval/decided'])
     expect(parentEvents.at(-1)?.data).toMatchObject({ outcome: 'allowed-once' })
