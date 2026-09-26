@@ -75,8 +75,10 @@
       "agent": "qa",
       "title": "建立多租户和会话契约回归",
       "description": "基于 P0-1 契约建立伪造主体、跨账号 sessionId、跨账户 GitHub credential、重复 turn request、迟到/失序事件及撤销授权的测试矩阵。使用合成账号与模拟上游。",
-      "priority": 1,
-      "dependencies": [],
+      "priority": 2,
+      "dependencies": [
+        "p0-1"
+      ],
       "estimated_complexity": "high",
       "acceptance_criteria": [
         "两个测试主体不能互读会话、OAuth 凭据、文件、设备、知识对象或用量。",
@@ -101,7 +103,7 @@
       "agent": "backend",
       "title": "增加受保护的 DSH 会话桥和网站模型适配",
       "description": "在不替换现有默认入口的前提下，为登录态用户提供隐藏测试入口。服务端验证 Lain42 身份与权益，创建带主体归属的 DSH 会话；DSH 经服务端适配调用 New API；持久化和流事件按 P0-1 契约实现。",
-      "priority": 2,
+      "priority": 3,
       "dependencies": [
         "p0-1",
         "p0-2"
@@ -131,7 +133,7 @@
       "agent": "debug",
       "title": "验证 DSH 多轮语义和模型错误恢复",
       "description": "在 DSH 网站模型路径上复现历史错答、429、上游 5xx、推理断线、容量不足和工具失败污染；让错误按类别成为本轮结果，不让普通问候或 DeepSeek 常识被宽泛关键词路由到搜索。",
-      "priority": 3,
+      "priority": 4,
       "dependencies": [
         "p0-3"
       ],
@@ -158,7 +160,7 @@
       "agent": "backend",
       "title": "打通搜索、URL 和 GitHub OAuth 的 DSH 工具循环",
       "description": "将公开搜索、受限网页读取和当前用户 OAuth GitHub 查询作为明确声明权限的工具接入 DSH。工具结果携带来源和状态，返回同一轮模型继续回答；授权拒绝或上游失败转为结构化工具结果，不崩溃、不编造。",
-      "priority": 3,
+      "priority": 5,
       "dependencies": [
         "p0-3",
         "p0-4"
@@ -186,7 +188,7 @@
       "agent": "frontend",
       "title": "完成用户确认附件到 DSH 模型回答的闭环",
       "description": "在测试入口复用浏览器本地预览和解析能力。发送前列出文件名、解析结果和发送范围；确认后把所需内容交给当前 DSH 轮次。Pin 与本轮附件分开，未 Pin 不持久上传。",
-      "priority": 3,
+      "priority": 5,
       "dependencies": [
         "p0-3",
         "p0-4"
@@ -213,7 +215,7 @@
       "agent": "qa",
       "title": "执行 P0 双用户、设备离线和发布放行矩阵",
       "description": "组合自动化与真实浏览器流程，验证 DSH 入口的聊天、搜索、URL、OAuth、附件和数据隔离。通过测试账号分阶段切流并记录回滚证据；不要使用站点所有者的 A7A 充当公共节点。",
-      "priority": 4,
+      "priority": 6,
       "dependencies": [
         "p0-2",
         "p0-4",
@@ -244,7 +246,7 @@
       "agent": "backend",
       "title": "完善本人设备 CLI/MCP 执行",
       "description": "P0 放行后支持用户明确选择的私有桌面或无头设备；最小权限、目录 allowlist、写入审批、撤销和可恢复状态；保持浏览器与服务端身份分离。",
-      "priority": 5,
+      "priority": 7,
       "dependencies": [
         "p0-7"
       ],
@@ -268,7 +270,7 @@
       "agent": "db",
       "title": "统一积分、赠送、用量与退款账本",
       "description": "审计现有充值和 New API 用量真值后扩展同一可审计账本；区分充值、管理员赠送、预留、消费和退款；同一业务 requestId 幂等。",
-      "priority": 5,
+      "priority": 7,
       "dependencies": [
         "p0-7"
       ],
@@ -295,7 +297,7 @@
       "agent": "frontend",
       "title": "完成手机体验与客户端代码展示",
       "description": "打磨响应式输入、附件、取消、重连和来源浏览；按需加载常见语言包，提供代码语言名称、高亮和复制。先使用现有客户端渲染组件。",
-      "priority": 5,
+      "priority": 7,
       "dependencies": [
         "p0-7"
       ],
@@ -319,7 +321,7 @@
       "agent": "db",
       "title": "实现私有 Pin 知识空间与 5/20 GB 配额",
       "description": "复用账号权益真值，在私有 OSS 保存用户主动 Pin 的内容；数据库维护对象归属、字节数、版本、索引状态和配额预留。",
-      "priority": 6,
+      "priority": 8,
       "dependencies": [
         "p0-7",
         "p1-2"
@@ -346,7 +348,7 @@
       "agent": "mobile",
       "title": "发布复用 Web 授权的 Tauri 入口",
       "description": "待 Web 主流程稳定后，将 Tauri 作为可选安装入口；不为远程网页授予任意本机 shell 权限，设备操作复用既有本人授权协议。",
-      "priority": 6,
+      "priority": 8,
       "dependencies": [
         "p0-7",
         "p1-1",
