@@ -1,6 +1,6 @@
 # Lain42 全平台 Agent：目标与执行计划
 
-状态：活动目标的验收版规划。架构方案见 [平台架构建议](../architecture/architecture-recommendation-lain42-platform.md)。本文件记录产品目标与放行条件，不代表线上功能已经完成。
+状态：活动目标的验收版规划。当前执行顺序见 [执行看板](./lain42-agent-task-board-2026-09-27.md)，架构方案见 [平台架构建议](../architecture/architecture-recommendation-lain42-platform.md)。本文件记录产品目标与放行条件，不代表线上功能已经完成。
 
 ## 目标
 
