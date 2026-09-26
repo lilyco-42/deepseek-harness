@@ -41,14 +41,14 @@
     "oauth_credential_isolation": "New API 有每用户加密 GitHub 凭据隔离控制器回归，CI run 36265731528 成功；该证据不等于全站会话、文件、设备、知识或用量隔离。",
     "public_search_and_url": "各有一次真实线上资料回流模型并给出来源的记录；没有证明 DSH 已接管，需加入自动化与浏览器放行矩阵。",
     "attachments": "存在客户端预览与确认 UI；尚无完整确认后模型基于合成文件实际内容作答的浏览器证据。",
-    "dsh_integration": "DSH 有 Agent loop、会话控制器和事件流；New API 仍是生产聊天入口，Lain42 身份映射、New API 模型适配和租户隔离连接未完成。"
+    "dsh_integration": "DSH 有 Agent loop、会话控制器和事件流；New API 仍是生产聊天入口。SessionController create request accepts workspaceId, cwd, and sessionId, while Gateway PeerScope is transport caller scope, not Lain42 account identity. The Lain42 identity mapping, New API model adapter, web-safe capability subset, and tenant isolation bridge are not complete."
   },
   "tasks": [
     {
       "id": "p0-1",
       "agent": "architecture",
       "title": "冻结 New API 到 DSH 的身份、会话和事件契约",
-      "description": "审计现有 New API 登录/额度调用与 DSH SessionController、Agent loop、事件协议。规定已验证主体映射、会话所有权、短期服务身份、请求幂等、流事件序号、工具执行位置和回滚入口。接口路径仅在核对现有代码后确定。",
+      "description": "审计现有 New API 登录/额度调用与 DSH SessionController、Agent loop、事件协议。规定已验证主体映射、会话所有权、短期服务身份、请求幂等、流事件序号、工具执行位置和回滚入口。网站只能暴露挑选过的 web-safe DSH 能力；任意 cwd、服务端文件、原生打开路径、shell 和管理员插件不得向浏览器透传。接口路径仅在核对现有代码后确定。",
       "priority": 1,
       "dependencies": [],
       "estimated_complexity": "high",
@@ -56,7 +56,8 @@
         "文档列出身份信任边界、New API 与 DSH 的唯一数据真值、事件关联字段和失败语义。",
         "明确浏览器不能提交可被服务端直接信任的主体 ID，也不接收内部服务密钥。",
         "给出迁移和回滚路径；未通过租户隔离前 DSH 入口仅限测试账号。",
-        "服务协议不要求将站点所有者 A7A、共享管理员 shell 或任意 MCP server 暴露给普通用户。"
+        "服务协议不要求将站点所有者 A7A、共享管理员 shell 或任意 MCP server 暴露给普通用户。",
+        "网站入口不暴露 DSH Host 的任意 cwd、workspace、文件系统或原生命令能力；项目操作经本人设备适配器。"
       ],
       "artifacts_expected": [
         ".agents/results/architecture/architecture-recommendation-lain42-platform.md",
