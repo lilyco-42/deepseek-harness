@@ -6,6 +6,8 @@ Use DeepSeek Harness as the Agent runtime, with Lain42 as its default model gate
 
 This is an opt-in first slice, not a public deployment. The upstream `dsh web` surface is a local, process-token-authenticated single-user application. Public multi-user access requires a separate Lain42 control plane that authenticates each user, maps each session to exactly one owned device, forwards only authorized Agent events, and never exposes the device's local Web port or credentials.
 
+For a server-owned browser Session, the Web bundle includes the `lain42-web` preset. Create these Sessions with `agentPreset: 'lain42-web'`; it exposes only bounded `web_fetch` and does not mount shell, filesystem, native desktop, plugin-management, or subagent tools. This is a least-privilege capability set, not an authentication layer: the Lain42 control plane must still resolve every public Session through the authenticated user's server-side ownership mapping.
+
 ## Current first slice
 
 `cordis.patch.yml` routes the default model through the existing OpenAI-compatible Lain42 API using the official `llm-pi-ai` adapter. The model id and API key come from the node owner's environment; no credential is committed. It disables the official DeepSeek model and search adapters and the stock session-log/telemetry exports. Public URL fetch remains available. Search needs an independently configured provider and is **not ready** in this slice. The Actions smoke uses a mock gateway and proxy-served fixture page to verify that a model request following the fetch tool receives the page text; it does not verify live Lain42 availability or answer quality.

@@ -331,6 +331,26 @@ describe('the shipped Web composition', () => {
     }
   })
 
+  it('keeps the hosted Lain42 preset limited to bounded URL reading', async () => {
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('preset-lain42-web'),
+      setup: agentCtx => ctx.agentPresets.mount(agentCtx, 'lain42-web').then(() => undefined),
+    })
+    try {
+      const assembly = await ctx.systemPrompt.assemble({ scope: handle.agent })
+      expect(assembly.tools.map(tool => tool.name)).toEqual(['web_fetch'])
+      expect(ctx.agentPresets.serviceFor(handle.agent, 'fs')).toBeUndefined()
+      expect(ctx.agentPresets.serviceFor(handle.agent, 'subagents')).toBeUndefined()
+      expect(ctx.commands.find(handle.agent, 'goal')).toBeUndefined()
+      expect(assembly.sections).toEqual([expect.objectContaining({
+        name: 'deployment:persona-prefix',
+        text: expect.stringContaining('Lain42 web Agent'),
+      })])
+    } finally {
+      await handle.dispose()
+    }
+  })
+
   it('keeps two differently composed sessions independent', async () => {
     const full = await ctx.agents.create({
       sessionId: SessionId('preset-both-full'),
