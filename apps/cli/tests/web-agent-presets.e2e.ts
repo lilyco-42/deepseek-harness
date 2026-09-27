@@ -342,10 +342,9 @@ describe('the shipped Web composition', () => {
       expect(ctx.agentPresets.serviceFor(handle.agent, 'fs')).toBeUndefined()
       expect(ctx.agentPresets.serviceFor(handle.agent, 'subagents')).toBeUndefined()
       expect(ctx.commands.find(handle.agent, 'goal')).toBeUndefined()
-      expect(assembly.sections).toEqual([expect.objectContaining({
-        name: 'deployment:persona-prefix',
-        text: expect.stringContaining('Lain42 web Agent'),
-      })])
+      expect(assembly.sections).toHaveLength(1)
+      expect(assembly.sections[0]?.name).toBe('deployment:persona-prefix')
+      expect(assembly.sections[0]?.text).toContain('Lain42 web Agent')
     } finally {
       await handle.dispose()
     }

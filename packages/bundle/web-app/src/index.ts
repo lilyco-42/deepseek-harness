@@ -232,7 +232,7 @@ export function apply(ctx: Context, config: Config): void {
   const existingRequestHeaders = ctx.get('llmRequestHeaders')
   const lain42RequestHeaders = createLain42ModelRelayHeadersResolver()
   ctx.provide('llmRequestHeaders', {
-    resolve: async input => {
+    resolve: async (input) => {
       const existing = await existingRequestHeaders?.resolve(input)
       const lain42 = await lain42RequestHeaders.resolve(input)
       if (existing === undefined) return lain42

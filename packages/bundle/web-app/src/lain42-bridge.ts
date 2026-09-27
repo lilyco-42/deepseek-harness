@@ -46,7 +46,9 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
   if (secret === undefined || Buffer.byteLength(secret, 'utf8') < 32) {
     throw new Error('Lain42 bridge requires LAIN42_DSH_BRIDGE_SECRET with at least 32 UTF-8 bytes')
   }
-  const handler = createLain42BridgeHandler(sessionController, secret, message => ctx.logger.warn(message))
+  const handler = createLain42BridgeHandler(sessionController, secret, (message) => {
+    ctx.logger.warn(message)
+  })
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: LAIN42_BRIDGE_PATH,
@@ -109,10 +111,9 @@ async function handleTurn(
   const sessionId = brandString<SessionId>(turnRequest.sessionId)
   const requestId = brandString<SessionRequestId>(turnRequest.requestId)
   const controller = new AbortController()
-  let timedOut = false
+  const timeoutReason = new Error('Lain42 bridge turn timed out')
   const timer = setTimeout(() => {
-    timedOut = true
-    controller.abort(new Error('Lain42 bridge turn timed out'))
+    controller.abort(timeoutReason)
   }, TURN_TIMEOUT_MS)
   try {
     await sessionController.create({ sessionId, agentPreset: PRESET_ID })
@@ -133,6 +134,7 @@ async function handleTurn(
     }
     writeJson(response, 200, { version: 1, requestId: turnRequest.requestId, answer: result.answer })
   } catch (error) {
+    const timedOut = controller.signal.reason === timeoutReason
     const status = timedOut ? 504 : 502
     const code = timedOut ? 'agent_turn_timeout' : 'agent_turn_failed'
     logWarning(`Lain42 bridge ${code} (${error instanceof Error ? error.name : 'unknown'})`)
@@ -192,7 +194,7 @@ function textFromAssistant(value: unknown): string | undefined {
   const message = asRecord(value)
   const content = message?.content
   if (!Array.isArray(content)) return undefined
-  const text = content.flatMap(part => {
+  const text = content.flatMap((part) => {
     const block = asRecord(part)
     return block?.type === 'text' && typeof block.text === 'string' ? [block.text] : []
   }).join('')
@@ -255,10 +257,10 @@ function verifySignature(
 async function readBody(request: IncomingMessage): Promise<Buffer> {
   const declaredLength = Number(request.headers['content-length'])
   if (Number.isFinite(declaredLength) && declaredLength > BODY_LIMIT_BYTES) throw new BodyLimitError()
-  const chunks: Buffer[] = []
+  const chunks: Uint8Array[] = []
   let size = 0
   for await (const chunk of request) {
-    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk)
+    const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk)
     size += bytes.byteLength
     if (size > BODY_LIMIT_BYTES) throw new BodyLimitError()
     chunks.push(bytes)

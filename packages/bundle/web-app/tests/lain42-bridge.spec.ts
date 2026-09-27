@@ -24,8 +24,11 @@ const REQUEST_ID = brandString<SessionRequestId>('123e4567-e89b-42d3-a456-426614
 let server: Server | undefined
 
 afterEach(async () => {
-  if (server !== undefined) {
-    await new Promise<void>(resolve => server?.close(() => resolve()))
+  const active = server
+  if (active !== undefined) {
+    await new Promise<void>((resolve) => {
+      active.close(() => { resolve() })
+    })
     server = undefined
   }
 })
@@ -164,7 +167,7 @@ async function listen(handler: ReturnType<typeof createLain42BridgeHandler>): Pr
   server = active
   await new Promise<void>((resolve, reject) => {
     active.once('error', reject)
-    active.listen(0, '127.0.0.1', () => resolve())
+    active.listen(0, '127.0.0.1', () => { resolve() })
   })
   const address = active.address() as AddressInfo
   return `http://127.0.0.1:${String(address.port)}`

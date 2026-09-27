@@ -9,6 +9,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { apply, inject as webAppInject, internals } from '../src/index.ts'
 
 const contexts: Context[] = []
@@ -142,7 +143,7 @@ describe('web app browser startup', () => {
       port: 4567,
       registerFallback: vi.fn(() => () => {}),
       renderIndex: (html: string) => html,
-      register: vi.fn(() => () => {}),
+      register: vi.fn((_route: WebRoute) => () => {}),
     }
     const connection = {
       authenticatedUrl: (url: string) => url,
@@ -217,11 +218,11 @@ describe('web app browser startup', () => {
     await vi.waitFor(() => {
       expect(ctx.get('webRuntime')).toEqual({ lanAddresses: [], trustedHosts: [] })
       expect(ctx.get('sessionController')).toBeDefined()
-      expect(server.register).toHaveBeenCalledWith(expect.objectContaining({
-        kind: 'exact',
-        path: '/lain42/bridge/v1/turn',
-        handler: expect.any(Function),
-      }))
+      expect(server.register).toHaveBeenCalledOnce()
+      const route = server.register.mock.calls[0]?.[0]
+      expect(route?.kind).toBe('exact')
+      expect(route?.path).toBe('/lain42/bridge/v1/turn')
+      expect(typeof route?.handler).toBe('function')
     })
   })
 })
