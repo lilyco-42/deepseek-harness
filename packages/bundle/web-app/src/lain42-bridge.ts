@@ -25,6 +25,7 @@ interface Lain42TurnRequest {
   readonly version: 1
   readonly sessionId: string
   readonly requestId: string
+  readonly model?: string
   readonly text: string
 }
 
@@ -66,7 +67,7 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
  * @returns A web route handler for the private turn endpoint.
  */
 export function createLain42BridgeHandler(
-  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow'>,
+  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>,
   secret: string,
   logWarning: (message: string) => void,
 ): WebRoute['handler'] {
@@ -81,7 +82,7 @@ export function createLain42BridgeHandler(
 async function handleTurn(
   request: IncomingMessage,
   response: ServerResponse,
-  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow'>,
+  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>,
   secret: string,
   nonces: Map<string, number>,
   logWarning: (message: string) => void,
@@ -125,6 +126,13 @@ async function handleTurn(
   }, TURN_TIMEOUT_MS)
   try {
     await sessionController.create({ sessionId, agentPreset: PRESET_ID })
+    if (turnRequest.model !== undefined) {
+      await sessionController.selectModel({
+        sessionId,
+        provider: PRESET_ID,
+        model: turnRequest.model,
+      })
+    }
     await sessionController.prompt({
       sessionId,
       requestId,
@@ -153,7 +161,7 @@ async function handleTurn(
 
 /** Follow durable events so retries can recover the result already committed for the same request id. */
 async function collectTurn(
-  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow'>,
+  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>,
   sessionId: SessionId,
   requestId: SessionRequestId,
   signal: AbortSignal,
@@ -217,14 +225,26 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   const record = asRecord(value)
   if (record === undefined) return undefined
   const keys = Object.keys(record).sort()
-  if (keys.length !== 4 || keys.join(',') !== 'requestId,sessionId,text,version') return undefined
+  const requiredKeys = ['requestId', 'sessionId', 'text', 'version']
+  if (requiredKeys.some(key => !keys.includes(key))
+    || keys.some(key => key !== 'model' && !requiredKeys.includes(key))) return undefined
   if (record.version !== 1 || typeof record.sessionId !== 'string'
     || !/^[A-Za-z0-9]{64}$/.test(record.sessionId)
     || typeof record.requestId !== 'string'
-    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.requestId)
+    // New API derives deterministic UUIDv5 IDs from account-scoped message
+    // keys so a retry can recover the already completed DSH turn.
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.requestId)
     || typeof record.text !== 'string' || record.text.trim().length === 0
     || Buffer.byteLength(record.text, 'utf8') > PROMPT_LIMIT_BYTES) return undefined
-  return { version: 1, sessionId: record.sessionId, requestId: record.requestId, text: record.text }
+  const model = record.model
+  if (model !== undefined && (typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model))) return undefined
+  return {
+    version: 1,
+    sessionId: record.sessionId,
+    requestId: record.requestId,
+    ...(model === undefined ? {} : { model }),
+    text: record.text,
+  }
 }
 
 /** Compute the v1 signature sent by the authenticated New API service.

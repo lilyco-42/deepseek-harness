@@ -6,7 +6,7 @@ Use DeepSeek Harness as the Agent runtime, with Lain42 as its default model gate
 
 This is an opt-in first slice, not a public deployment. The upstream `dsh web` surface is a local, process-token-authenticated single-user application. Public multi-user access requires a separate Lain42 control plane that authenticates each user, maps each session to exactly one owned device, forwards only authorized Agent events, and never exposes the device's local Web port or credentials.
 
-For a server-owned browser Session, the Web bundle includes the `lain42-web` preset. Create these Sessions with `agentPreset: 'lain42-web'`; it exposes only bounded `web_fetch` and does not mount shell, filesystem, native desktop, plugin-management, or subagent tools. This is a least-privilege capability set, not an authentication layer: the Lain42 control plane must still resolve every public Session through the authenticated user's server-side ownership mapping.
+For a server-owned browser Session, the Web bundle includes the `lain42-web` preset. Create these Sessions with `agentPreset: 'lain42-web'`; it exposes no server-side web, shell, filesystem, native desktop, plugin-management, or subagent tools. The browser may pass bounded search or page text it has already fetched as untrusted context. This is a least-privilege capability set, not an authentication layer: the Lain42 control plane must still resolve every public Session through the authenticated user's server-side ownership mapping.
 
 ## Current first slice
 

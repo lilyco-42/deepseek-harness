@@ -12,6 +12,7 @@ import type {
   SessionFollowRequest,
   SessionPromptRequest,
   SessionRequestId,
+  SessionSelectModelRequest,
   SessionWireEvent,
 } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -47,6 +48,10 @@ describe('Lain42 private DSH bridge', () => {
         expect(request).toEqual({ sessionId: SESSION_ID, agentPreset: 'lain42-web' })
         return { sessionId: SESSION_ID, agentPreset: 'lain42-web' }
       }),
+      selectModel: vi.fn(async (request: SessionSelectModelRequest) => {
+        calls.push('selectModel')
+        return { selected: request }
+      }),
       prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
         calls.push('prompt')
         expect(request).toEqual({
@@ -58,13 +63,14 @@ describe('Lain42 private DSH bridge', () => {
         return { accepted: true as const }
       }),
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
-    } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow'>
+    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
       version: 1,
       sessionId: SESSION_ID,
       requestId: REQUEST_ID,
+      model: 'openai/gpt-5.6-sol',
       text: 'What is DeepSeek?',
     }))
     const timestamp = String(Math.floor(Date.now() / 1000))
@@ -78,7 +84,12 @@ describe('Lain42 private DSH bridge', () => {
       requestId: REQUEST_ID,
       answer: 'DeepSeek is an AI company and model family.',
     })
-    expect(calls).toEqual(['create', 'prompt'])
+    expect(calls).toEqual(['create', 'selectModel', 'prompt'])
+    expect(sessionController.selectModel).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      provider: 'lain42-web',
+      model: 'openai/gpt-5.6-sol',
+    })
     expect(sessionController.follow).toHaveBeenCalledWith(
       { address: { kind: 'session', sessionId: SESSION_ID }, maxMessages: 50 },
       expect.any(AbortSignal),
@@ -469,9 +480,10 @@ async function* answerEvents(): AsyncGenerator<SessionFollowFrame> {
 
 function inactiveSessionController(
   followFrames: (signal: AbortSignal) => AsyncGenerator<SessionFollowFrame> = () => answerEvents(),
-): Pick<SessionController, 'create' | 'prompt' | 'follow'> {
+): Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'> {
   return {
     create: vi.fn(async (_request: SessionCreateRequest) => ({ sessionId: SESSION_ID })),
+    selectModel: vi.fn(async (request: SessionSelectModelRequest) => ({ selected: request })),
     prompt: vi.fn(async (_request: SessionPromptRequest, _signal: AbortSignal) => ({ accepted: true as const })),
     follow: vi.fn((_request: SessionFollowRequest, signal: AbortSignal) => followFrames(signal)),
   }

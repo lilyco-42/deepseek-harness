@@ -66,11 +66,11 @@ dsh --profile web --no-open --port 8080
 
 每个浏览器会话选择一个随发行版交付的 preset（默认 `standard`）。Agent 预设设置页可更改默认项并编辑预设的子插件；保存结果持久化到 `$DSH_HOME/profiles/web/cordis.patch.yml`。只有 Host 提供可编辑的 profile 时，Creator 的插件管理工具才会启用。
 
-`lain42-web` 预设供 Lain42 服务端控制面创建会话时使用。它只开放有界 `web_fetch`，不挂载 shell、文件系统、本机桌面、插件管理或子 Agent 工具。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
+`lain42-web` 预设供 Lain42 服务端控制面创建会话时使用。它不开放网页、shell、文件系统、本机桌面、插件管理或子 Agent 工具；浏览器端搜索和 WASM 网页读取作为有界且不可信的上下文传入。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
 
 ### Lain42 私有控制面接口
 
-`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID 和有界文本；路由固定使用 `agentPreset: 'lain42-web'`，不接受目录、命令或模型覆盖。当前只返回完成后的助手文本，尚不支持流式传输或文件附件。
+`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本和可选模型名。路由固定使用 `agentPreset: 'lain42-web'` 与 `lain42-web` 模型 provider，不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，尚不支持流式传输或文件附件。
 
 要让模型按账号计费，本 bundle 还会为 `lain42-web` 模型路由提供可选的 `llmRequestHeaders` 解析器。DSH 与 New API 必须设置相同且独立的 `LAIN42_AGENT_MODEL_RELAY_SECRET`（至少 32 字节），再把 provider profile 指向 `https://api.lain42.top/v1/agent`，模型 id 使用 New API 已启用的名称。解析器会为每次请求签署服务端创建的 DSH 会话 id 和模型名称，不会把签名密钥发送到浏览器。New API 会拒绝缺少有效服务端 Agent 会话映射的请求，因此控制面必须在服务端创建映射并传递私有 DSH 会话 id。
 
