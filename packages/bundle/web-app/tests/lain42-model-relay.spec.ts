@@ -6,10 +6,10 @@ import {
 } from '../src/lain42-model-relay.ts'
 
 describe('Lain42 model relay header resolver', () => {
-  it('signs the server-owned session and selected model without sending the secret', () => {
+  it('signs the server-owned session and selected model without sending the secret', async () => {
     const secret = '0123456789abcdef0123456789abcdef'
     const sessionId = 'a'.repeat(64)
-    const headers = createLain42ModelRelayHeadersResolver(secret).resolve({
+    const headers = await createLain42ModelRelayHeadersResolver(secret).resolve({
       provider: LAIN42_AGENT_MODEL_PROVIDER,
       model: 'deepseek-chat',
       sessionId,

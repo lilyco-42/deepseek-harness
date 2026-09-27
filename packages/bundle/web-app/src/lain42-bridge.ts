@@ -145,7 +145,7 @@ async function handleTurn(
 
 /** Follow durable events so retries can recover the result already committed for the same request id. */
 async function collectTurn(
-  sessionController: SessionController,
+  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow'>,
   sessionId: SessionId,
   requestId: SessionRequestId,
   signal: AbortSignal,
