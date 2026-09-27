@@ -24,7 +24,7 @@
       "path": "../../boot/cmdline"
     },
     {
-      "path": "../../api/session-controller"
+      "path": "../../api/session-controller/tsconfig.host.json"
     },
     {
       "path": "../../client/connection/tsconfig.host.json"
