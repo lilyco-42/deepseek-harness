@@ -31,7 +31,7 @@ const servers: Server[] = []
 let nonceCounter = 0
 
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map((active) => new Promise<void>((resolve) => {
+  await Promise.all(servers.splice(0).map(active => new Promise<void>(resolve => {
     active.close(() => { resolve() })
   })))
   vi.restoreAllMocks()
@@ -122,17 +122,17 @@ describe('Lain42 private DSH bridge', () => {
   })
 
   it('requires the session controller and a 32-byte shared secret before registration', () => {
-    expect(() => registerLain42Bridge(new Context(), SECRET))
+    expect(() => { registerLain42Bridge(new Context(), SECRET) })
       .toThrow('requires the DSH session-controller service')
 
     const ctx = new Context()
     ctx.provide('sessionController', inactiveSessionController() as never)
-    expect(() => registerLain42Bridge(ctx, undefined))
+    expect(() => { registerLain42Bridge(ctx, undefined) })
       .toThrow('requires LAIN42_DSH_BRIDGE_SECRET with at least 32 UTF-8 bytes')
 
     const weakSecretContext = new Context()
     weakSecretContext.provide('sessionController', inactiveSessionController() as never)
-    expect(() => registerLain42Bridge(weakSecretContext, 'short'))
+    expect(() => { registerLain42Bridge(weakSecretContext, 'short') })
       .toThrow('requires LAIN42_DSH_BRIDGE_SECRET with at least 32 UTF-8 bytes')
   })
 
@@ -386,7 +386,12 @@ describe('Lain42 private DSH bridge', () => {
 
     const nonErrorWarning = vi.fn()
     const nonErrorController = inactiveSessionController()
-    nonErrorController.create = vi.fn(async () => Promise.reject({ reason: 'private upstream detail' }))
+    const nonErrorRejection = Promise.resolve({
+      then(_resolve: unknown, reject: (reason: unknown) => void) {
+        reject({ reason: 'private upstream detail' })
+      },
+    } as PromiseLike<never>)
+    nonErrorController.create = vi.fn(async () => nonErrorRejection)
     const nonErrorUrl = await listen(createLain42BridgeHandler(nonErrorController, SECRET, nonErrorWarning))
     const nonError = await post(nonErrorUrl, jsonBody(validRequest()))
     expect(nonError.status).toBe(502)
@@ -400,7 +405,7 @@ describe('Lain42 private DSH bridge', () => {
     const timeoutController = inactiveSessionController(async function* (signal) {
       if (signal.aborted) throw signal.reason
       await new Promise<void>((_resolve, reject) => {
-        signal.addEventListener('abort', () => { reject(signal.reason) }, { once: true })
+        signal.addEventListener('abort', () => { reject(new Error('request aborted')) }, { once: true })
       })
     })
     const timeoutWarning = vi.fn()

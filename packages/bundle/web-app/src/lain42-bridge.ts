@@ -274,7 +274,7 @@ async function readBody(request: IncomingMessage): Promise<Buffer> {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : Buffer.from(chunk)
     size += bytes.byteLength
     if (size > BODY_LIMIT_BYTES) throw new BodyLimitError()
-    chunks.push(bytes)
+    chunks.push(Buffer.from(bytes))
   }
   return Buffer.concat(chunks, size)
 }
