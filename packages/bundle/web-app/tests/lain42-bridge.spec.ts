@@ -199,7 +199,7 @@ describe('Lain42 private DSH bridge', () => {
     expect(await failedStream.json()).toEqual({ error: 'invalid_request' })
 
     const noLengthUrl = await listen(handler, (request) => { delete request.headers['content-length'] })
-    const noDeclaredLength = await post(noLengthUrl, Buffer.from('{}'))
+    const noDeclaredLength = await post(noLengthUrl, Buffer.from(JSON.stringify(validRequest())))
     expect(noDeclaredLength.status).toBe(200)
     expect(await noDeclaredLength.json()).toMatchObject({ answer: 'DeepSeek is an AI company and model family.' })
   })
