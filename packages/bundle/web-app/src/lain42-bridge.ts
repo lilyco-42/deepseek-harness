@@ -10,6 +10,7 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionRequestId, SessionFollowFrame } from '@deepseek-ai/dsh-api-session-controller/types'
 
+/** Exact server-only path for HMAC-authenticated Lain42 Agent turns. */
 export const LAIN42_BRIDGE_PATH = '/lain42/bridge/v1/turn'
 
 const BODY_LIMIT_BYTES = 32 * 1024
@@ -37,7 +38,10 @@ interface SessionEventRecord {
   readonly data: unknown
 }
 
-/** Register the exact server-to-server route and release it with this plugin. */
+/** Register the exact server-to-server route and release it with this plugin.
+ * @param ctx Host context that owns the web server and session controller.
+ * @param secret Shared HMAC secret used to authenticate New API requests.
+ */
 export function registerLain42Bridge(ctx: Context, secret: string | undefined): void {
   const sessionController = ctx.get('sessionController')
   if (sessionController === undefined) {
@@ -56,7 +60,12 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
   }), 'web-app: Lain42 private turn bridge')
 }
 
-/** Create the authenticated handler used by the route and its wire tests. */
+/** Create the authenticated handler used by the route and its wire tests.
+ * @param sessionController DSH service that creates, prompts, and follows sessions.
+ * @param secret Shared HMAC secret used to authenticate each request.
+ * @param logWarning Receives safe diagnostics without request content or secrets.
+ * @returns A web route handler for the private turn endpoint.
+ */
 export function createLain42BridgeHandler(
   sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow'>,
   secret: string,
@@ -221,7 +230,13 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   return { version: 1, sessionId: record.sessionId, requestId: record.requestId, text: record.text }
 }
 
-/** Compute the v1 signature sent by the authenticated New API service. */
+/** Compute the v1 signature sent by the authenticated New API service.
+ * @param secret Shared HMAC secret for the bridge.
+ * @param timestamp Unix timestamp in seconds included in the signed headers.
+ * @param nonce Unique 128-bit lowercase hexadecimal request nonce.
+ * @param body Exact UTF-8 request bytes whose digest is included in the signature.
+ * @returns Lowercase hexadecimal HMAC-SHA256 signature.
+ */
 export function signLain42BridgeRequest(secret: string, timestamp: string, nonce: string, body: Buffer): string {
   const bodyDigest = createHash('sha256').update(body).digest('hex')
   const canonical = `v1\n${timestamp}\n${nonce}\nPOST\n${LAIN42_BRIDGE_PATH}\n${bodyDigest}`

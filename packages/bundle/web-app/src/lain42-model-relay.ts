@@ -3,14 +3,20 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import type { LlmRequestHeadersResolver } from '@deepseek-ai/dsh-llm'
 
+/** Provider id used by the web Agent's server-owned model relay. */
 export const LAIN42_AGENT_MODEL_PROVIDER = 'lain42-web'
+/** Internal New API endpoint that receives signed model requests. */
 export const LAIN42_AGENT_MODEL_RELAY_PATH = '/v1/agent/chat/completions'
+/** Environment variable that stores the shared model-relay HMAC secret. */
 export const LAIN42_AGENT_MODEL_RELAY_SECRET_ENV = 'LAIN42_AGENT_MODEL_RELAY_SECRET'
 
 const SESSION_ID = /^[A-Za-z0-9]{64}$/u
 const MODEL_ID = /^[A-Za-z0-9._:/-]{1,128}$/u
 
-/** Resolve per-request signatures without exposing the relay secret to the browser. */
+/** Resolve per-request signatures without exposing the relay secret to the browser.
+ * @param secret Optional shared secret; defaults to the server environment value.
+ * @returns Resolver that signs requests for the Lain42 model provider.
+ */
 export function createLain42ModelRelayHeadersResolver(
   secret: string | undefined = process.env[LAIN42_AGENT_MODEL_RELAY_SECRET_ENV],
 ): LlmRequestHeadersResolver {
@@ -38,7 +44,14 @@ export function createLain42ModelRelayHeadersResolver(
   }
 }
 
-/** Canonical v1 HMAC shared with New API's internal model relay. */
+/** Canonical v1 HMAC shared with New API's internal model relay.
+ * @param secret Shared HMAC secret configured on the Agent and New API servers.
+ * @param timestamp Unix timestamp in seconds included in the signed headers.
+ * @param nonce Unique 128-bit lowercase hexadecimal request nonce.
+ * @param sessionId Server-owned Agent session id bound to the request.
+ * @param model Provider model id bound to the request.
+ * @returns Lowercase hexadecimal HMAC-SHA256 signature.
+ */
 export function signLain42AgentModelRelayRequest(
   secret: string,
   timestamp: string,
