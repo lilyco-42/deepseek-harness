@@ -3912,7 +3912,7 @@ Source: [`packages/web/web/src/index.ts:55`](../packages/web/web/src/index.ts)
 
 ## `@deepseek-ai/dsh-web-app`
 
-Requires: `webServer`
+Requires: `webServer`, `sessionController`
 
 ```ts config-catalog
 /** Plugin config: composed deployment settings plus per-invocation command-line values. */
@@ -3930,6 +3930,8 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Mount the private HMAC-authenticated Lain42 server-to-server turn route. */
+  enableLain42Bridge?: boolean
 }
 ```
 

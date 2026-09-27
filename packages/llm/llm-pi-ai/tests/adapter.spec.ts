@@ -123,6 +123,35 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('resolves host-owned headers for the selected model and session on every request', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const resolved: Array<{ provider: string; model: string; sessionId?: string }> = []
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.provide('llmRequestHeaders', {
+      resolve(input) {
+        resolved.push(input)
+        return { 'x-lain42-agent-session': input.sessionId ?? 'missing-session' }
+      },
+    })
+    await ctx.plugin(LlmPiAi, {
+      providers: { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } },
+    })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      sessionId: 'server-session-42' as never,
+      messages: [],
+    })
+
+    expect(resolved).toEqual([{
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      sessionId: 'server-session-42',
+    }])
+    expect(server.headers[0]?.['x-lain42-agent-session']).toBe('server-session-42')
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {

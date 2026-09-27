@@ -3914,7 +3914,7 @@ export interface WebRuntimeConfig {
 
 ## `@deepseek-ai/dsh-web-app`
 
-需要： `webServer`
+需要： `webServer`、`sessionController`
 
 ```ts config-catalog
 /** Plugin config: composed deployment settings plus per-invocation command-line values. */
@@ -3932,6 +3932,8 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Mount the private HMAC-authenticated Lain42 server-to-server turn route. */
+  enableLain42Bridge?: boolean
 }
 ```
 

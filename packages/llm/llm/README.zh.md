@@ -157,6 +157,7 @@ for await (const chunk of ctx.llm.stream({
 - **变体通常要求实际产生方**——`prefill`、逐工具 `strict`、内容块 `cache` 提示和 `agent` 消息来源变体都没有产生方（见 [Agent Note](../../../.agents/notes/archived/simplification/2026-07-04-prune-producerless-vocabulary-variants.md)）。
 - **`BlockAssembler` 只处理核心块类型**——插件添加块类型的流若从未由 `block-end` 关闭，`blocks()` 会抛出异常。
 - **`GenerateOptions.sessionId` 是本地声明的品牌类型**——导入 dsh-session 的 `SessionId` 会产生依赖循环。
+- **`llmRequestHeaders` 是可选的宿主传输接口**——实现会在每次请求前收到 provider、model 和可选 session id；密钥应留在宿主，不要放进提示词。
 - **Session 变更类型是 V4 持久化的例外** — `DeveloperMessage` 承载增量 Session 变更。添加与移除块记录工具名称；所在的 Session 事件将添加绑定到拥有其定义的历史请求头。接纳和恢复规则见 [Session 引用](../../core/session/README.zh.md)。提供方序列化、延迟加载与 UI 展示仍留待后续实现。DeepSeek 两种协议与 pi-ai 均拒绝 developer 历史及 `deferLoading` 请求；Chat 与 Trajectory 拒绝 developer 事件。普通请求的行为不变。
 
 <a id="dev-note"></a>

@@ -26,6 +26,8 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-shell-env'
+import { registerLain42Bridge } from './lain42-bridge.ts'
+import { createLain42ModelRelayHeadersResolver } from './lain42-model-relay.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -38,7 +40,7 @@ const ANNOUNCED_ROOTS = new WeakSet<Context>()
 const WEB_RUNTIME_SERVICE = 'webRuntime'
 
 /** Services required before the web runtime can mount. */
-export const inject = ['webServer']
+export const inject = ['webServer', 'sessionController']
 
 /** Plugin config: composed deployment settings plus per-invocation command-line values. */
 export interface Config {
@@ -55,6 +57,8 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Mount the private HMAC-authenticated Lain42 server-to-server turn route. */
+  enableLain42Bridge?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -62,6 +66,7 @@ export const Config: z<Config> = z.object({
   printUrl: z.boolean().default(true),
   surfaceContext: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  enableLain42Bridge: z.boolean().default(false),
 })
 
 /** Bind-dependent Web values shared by the trust fence and URL display. */
@@ -224,6 +229,20 @@ export const internals: {
  */
 export function apply(ctx: Context, config: Config): void {
   const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const existingRequestHeaders = ctx.get('llmRequestHeaders')
+  const lain42RequestHeaders = createLain42ModelRelayHeadersResolver()
+  ctx.provide('llmRequestHeaders', {
+    resolve: async input => {
+      const existing = await existingRequestHeaders?.resolve(input)
+      const lain42 = await lain42RequestHeaders.resolve(input)
+      if (existing === undefined) return lain42
+      if (lain42 === undefined) return existing
+      return { ...existing, ...lain42 }
+    },
+  })
+  if (config.enableLain42Bridge) {
+    registerLain42Bridge(ctx, process.env.LAIN42_DSH_BRIDGE_SECRET)
+  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(launchEnvironmentOf(ctx))

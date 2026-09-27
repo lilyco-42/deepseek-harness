@@ -50,6 +50,7 @@ Most users never set these; the command-line flags feed the four settings below 
 | `printUrl` | `true` | Print the `dsh web:` URL line at startup |
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
+| `enableLain42Bridge` | `false` | Register the private Lain42 server-to-server turn route |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -66,6 +67,14 @@ When you launch `dsh --profile web` over SSH, the URL line still prints but the 
 Each browser session selects a shipped preset (`standard` by default). The Agent presets settings page changes the default and edits preset child plugins; saves persist in `$DSH_HOME/profiles/web/cordis.patch.yml`. Creator's plugin-management tool is enabled only when the Host provides an editable profile.
 
 The `lain42-web` preset is for Sessions created by the Lain42 server control plane. It exposes bounded `web_fetch` only and omits shell, filesystem, native-desktop, plugin-management, and subagent tools. A preset limits Agent capabilities; it does not authenticate website users or authorize access to Sessions. The control plane must resolve each opaque public Session through its own authenticated ownership mapping.
+
+### Private Lain42 control-plane bridge
+
+`enableLain42Bridge` adds one `POST /lain42/bridge/v1/turn` route for the authenticated New API backend. It requires `LAIN42_DSH_BRIDGE_SECRET` (at least 32 bytes) and a matching New API server secret. Requests use a timestamped HMAC, a one-use nonce, an opaque Session id, a UUID request id, and bounded text; the route fixes `agentPreset` to `lain42-web` and accepts no directory, command, or model override. It returns the completed assistant text and does not stream or carry file attachments yet.
+
+For account-billed models, this bundle also provides the optional `llmRequestHeaders` resolver for the `lain42-web` model route. Set the same independent `LAIN42_AGENT_MODEL_RELAY_SECRET` (at least 32 bytes) on DSH and New API, then configure that provider profile to use `https://api.lain42.top/v1/agent` and model ids enabled by New API. The resolver signs the server-owned DSH session id and selected model for each request; it never sends the relay secret to the browser. New API rejects calls without an active server-created Agent session mapping, so the control plane must provision and pass the private DSH session id server-side.
+
+Keep this DSH process on a dedicated server instance bound to loopback or a private network, and let only the New API backend reach the route. The bridge authenticates New API as a trusted service; it does not replace New API's user/session ownership checks or make the DSH Web UI and its other APIs safe to publish. Do not enable it on a personal paired node such as the owner's A7A.
 
 -----
 
