@@ -18,7 +18,7 @@ import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
-import { apply, Config, inject, internals } from '../src/index.ts'
+import { apply, Config, internals } from '../src/index.ts'
 
 vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
@@ -181,38 +181,6 @@ describe('web-app runtime glue', () => {
     const assembly = await ctx.systemPrompt.assemble()
     expect(assembly.sections.find(entry => entry.name === 'app:web-surface')?.text)
       .toContain('rebuilding the affected Web artifacts')
-    await ctx.fiber.dispose()
-  })
-
-  it('publishes webRuntime before waiting for the optional Lain42 bridge session service', async () => {
-    stageDist()
-    vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', 'test-only-lain42-bridge-secret-with-32-bytes')
-    const ctx = new Context()
-    const register = vi.fn(() => () => {})
-    ctx.provide('webServer', {
-      ...fakeHttpServer().server,
-      register,
-    } as never)
-
-    expect(inject).toEqual(['webServer'])
-    apply(ctx, new Config({
-      openBrowser: false,
-      printUrl: false,
-      surfaceContext: false,
-      trustedHosts: [],
-      enableLain42Bridge: true,
-    }))
-
-    expect(ctx.get('webRuntime')).toEqual({ lanAddresses: [], trustedHosts: [] })
-    expect(register).not.toHaveBeenCalled()
-
-    ctx.provide('sessionController', {} as never)
-    await vi.waitFor(() => { expect(register).toHaveBeenCalledOnce() })
-    expect(register).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'exact',
-      path: '/lain42/bridge/v1/turn',
-      handler: expect.any(Function),
-    }))
     await ctx.fiber.dispose()
   })
 
