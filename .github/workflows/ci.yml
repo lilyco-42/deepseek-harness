@@ -137,6 +137,18 @@ jobs:
             docs/module-graph.i18n.yaml
           if-no-files-found: error
 
+      - name: Regenerate event graph for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-doc-graphs
+
+      - name: Upload regenerated event producer-consumer graph
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-graph-generated-${{ github.sha }}
+          path: docs/event-producer-consumer.md
+          if-no-files-found: error
+
   node-24-coverage:
     if: github.event_name == 'pull_request'
     runs-on: >-
