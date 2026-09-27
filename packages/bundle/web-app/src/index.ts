@@ -40,7 +40,7 @@ const ANNOUNCED_ROOTS = new WeakSet<Context>()
 const WEB_RUNTIME_SERVICE = 'webRuntime'
 
 /** Services required before the web runtime can mount. */
-export const inject = ['webServer', 'sessionController']
+export const inject = ['webServer']
 
 /** Plugin config: composed deployment settings plus per-invocation command-line values. */
 export interface Config {
@@ -240,14 +240,19 @@ export function apply(ctx: Context, config: Config): void {
       return { ...existing, ...lain42 }
     },
   })
-  if (config.enableLain42Bridge) {
-    registerLain42Bridge(ctx, process.env.LAIN42_DSH_BRIDGE_SECRET)
-  }
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(launchEnvironmentOf(ctx))
   // Release dependent rows only after bind-dependent trust has been sampled once.
   ctx.provide(WEB_RUNTIME_SERVICE, runtime)
+  if (config.enableLain42Bridge) {
+    // sessionController depends on fileUploads -> connection -> webRuntime.
+    // Waiting for it as a static web-app dependency deadlocks the service tree
+    // because this plugin is the owner that provides webRuntime.
+    ctx.inject(['sessionController'], (bridgeCtx) => {
+      registerLain42Bridge(bridgeCtx, process.env.LAIN42_DSH_BRIDGE_SECRET)
+    })
+  }
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
   if (config.surfaceContext) {
     ctx.inject(['systemPrompt'], (promptCtx) => {
