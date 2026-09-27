@@ -1,12 +1,12 @@
 {
   "project_name": "Lain42 全平台 Agent",
-  "description": "以六项用户结果作为活动 Goal 的完成标准。先打通真实任务，再决定是否将 DSH 切为生产运行时。",
+  "description": "以六项用户结果作为活动 Goal 的完成标准。DSH 是目标对话运行时；先建立现有链路正确性基线，再尽早通过受保护入口渐进迁移真实对话和工具闭环。",
   "session_id": "20260927-070528",
   "created": "2026-09-27T07:05:28+08:00",
   "architecture_decisions": [
     {"decision": "用户流程优先于框架迁移。", "rationale": "框架接入不能代替正确回答、资料闭环、账户隔离和商业权益。", "alternatives_considered": ["先全面迁移 DSH", "推倒网站重写"]},
     {"decision": "统一 turn/tool/event 契约，每轮只有一个执行者。", "rationale": "受保护比较运行时而不重复回答、计费或产生副作用。", "alternatives_considered": ["长期双生产循环", "前端拼接多个 Agent 输出"]},
-    {"decision": "New API 保持网站身份、权益和模型网关真值；DSH 是内部试点候选。", "rationale": "避免平行账户余额及公网 Host 能力。", "alternatives_considered": ["在 DSH 复制账户", "公开 DSH Remote"]},
+    {"decision": "New API/Lain42 保持网站身份、OAuth、权益和模型网关真值；DSH 承载目标对话与工具循环，并尽早渐进接管。", "rationale": "用短时身份断言和统一工具契约连接运行时，避免平行账户、重复推理计费及公网 Host 能力。", "alternatives_considered": ["在 DSH 复制账户", "公开 DSH Remote", "把 DSH 评估拖到所有产品完成之后"]},
     {"decision": "匿名试用采用短期身份与服务端额度。", "rationale": "打开即用，但不开放私人凭据、设备或持久文件。", "alternatives_considered": ["所有访问都强制登录", "匿名身份拥有完整账户权限"]},
     {"decision": "A7A 是私人设备，CLI/MCP 只运行于用户授权的本人设备。", "rationale": "个人设备离线不能成为网站可用性条件。", "alternatives_considered": ["共享 A7A", "普通聊天回退到设备执行"]}
   ],
@@ -14,7 +14,7 @@
     {
       "id": "g0-chat",
       "agent": "debug",
-      "title": "恢复可信的普通对话和错误反馈",
+      "title": "建立可信的普通对话基线",
       "description": "修复错答、串题、失败轮污染，区分模型限流、站点容量和设备离线。",
       "priority": 1,
       "dependencies": [],
@@ -25,71 +25,71 @@
       "id": "g1-turn",
       "agent": "architecture",
       "title": "定义主体、turn、工具事件和幂等契约",
-      "description": "为现有循环与 DSH 试点建立不绑定运行时的产品接口。",
+      "description": "为现有链路与目标 DSH 运行时定义同一套、不绑定实现细节的产品接口。",
       "priority": 1,
-      "dependencies": [],
+      "dependencies": ["g0-chat"],
       "scope": ["new-api/controller/agent/", "deepseek-harness/packages/api/"],
-      "acceptance_criteria": ["客户端不能指定可信 userId/workspaceId/cwd。", "turnId、requestId、runId、事件序号、取消和续读语义明确。", "重复请求不重复计费或执行副作用。"]
+      "acceptance_criteria": ["客户端不能指定可信 userId/workspaceId/cwd。", "turnId、requestId、runId、事件序号、取消和续读语义明确。", "重复请求不重复计费或执行副作用；新旧运行时通过相同契约测试。"]
     },
     {
-      "id": "g2-identity-trial",
+      "id": "g2-dsh-runtime",
+      "agent": "architecture",
+      "title": "尽早接入 DSH 对话核心并做受保护试跑",
+      "description": "将 DSH 作为目标对话与工具循环；New API/Lain42 保留身份、模型、权益和用量真值。先以站点所有者受保护入口验证，再逐个迁移真实流程。",
+      "priority": 2,
+      "dependencies": ["g0-chat", "g1-turn"],
+      "scope": ["new-api/controller/agent/", "deepseek-harness/packages/api/"],
+      "acceptance_criteria": ["DSH 只由内网 Lain42 服务通过短时、限定受众和能力的身份断言调用。", "先通过真实普通聊天、取消/续读和离线故障；每轮只允许一个运行时、一轮推理和一次计费。", "记录空闲、单并发和目标并发资源；不公开 DSH 管理端点或通用主机能力。"]
+    },
+    {
+      "id": "g3-identity-trial",
       "agent": "backend",
       "title": "隔离用户数据、OAuth 和匿名试用",
-      "description": "复用网站账户，为免登录试用建立短期主体、限额和反滥用保护。",
+      "description": "复用网站账户，为免登录试用建立短期主体、限额和反滥用保护；仅在隔离门通过后开放 DSH 多用户流量。",
       "priority": 2,
-      "dependencies": ["g1-turn"],
-      "scope": ["new-api/controller/agent/", "new-api/model/", "new-api/middleware/"],
+      "dependencies": ["g1-turn", "g2-dsh-runtime"],
+      "scope": ["new-api/controller/agent/", "new-api/model/", "new-api/middleware/", "deepseek-harness/packages/api/"],
       "acceptance_criteria": ["双账号跨读会话、凭据、文件、设备、知识和用量均拒绝。", "匿名试用不能访问私人资源且服务端强制限额。", "网站 OAuth 与设备 gh 独立；撤销立即生效；令牌不进入模型和普通日志。"]
     },
     {
-      "id": "g3-grounded-answer",
+      "id": "g4-grounded-answer",
       "agent": "backend",
-      "title": "闭环搜索、URL、GitHub 到最终回答",
-      "description": "读取真实资料后交给同一轮模型，并呈现来源和准确错误。",
+      "title": "在目标运行时闭环搜索、URL、GitHub 到最终回答",
+      "description": "由 DSH 统一管理工具循环；Lain42 适配器读取资料后交给同一轮模型，并呈现来源和准确错误。",
       "priority": 3,
-      "dependencies": ["g0-chat", "g1-turn", "g2-identity-trial"],
-      "scope": ["new-api/controller/agent/", "deepseek-harness/packages/api/"],
-      "acceptance_criteria": ["搜索、URL 和 GitHub OAuth 有资料、最终回答、来源的端到端证据。", "OAuth 与本机 gh 分开；拒权、CORS、限流不会伪装为事实。"]
+      "dependencies": ["g0-chat", "g1-turn", "g2-dsh-runtime", "g3-identity-trial"],
+      "scope": ["new-api/controller/agent/", "deepseek-harness/packages/api/", "deepseek-harness/apps/web/"],
+      "acceptance_criteria": ["搜索、URL 和 GitHub OAuth 有真实资料、最终回答、来源与 turn 记录的端到端证据。", "OAuth 与本机 gh 分开；拒权、CORS、限流和离线不会伪装为事实。", "旧链路与 DSH 路径使用相同工具契约；流量切换不双跑、不重复扣费。"]
     },
     {
-      "id": "g4-client-mobile",
+      "id": "g5-client-mobile",
       "agent": "frontend",
       "title": "完成附件确认、客户端高亮和手机流程",
       "description": "客户端有界解析、预览与代码呈现，用户确认后才发送。",
       "priority": 3,
-      "dependencies": ["g1-turn", "g2-identity-trial"],
+      "dependencies": ["g1-turn", "g3-identity-trial", "g4-grounded-answer"],
       "scope": ["deepseek-harness/apps/web/"],
       "acceptance_criteria": ["模型能引用用户确认的合成文件；未确认不上传。", "取消、超限和恢复安全；Rust/JSON/Markdown 高亮与复制正常。", "手机窄屏能输入、查看回答/来源、附加文件及取消。"]
     },
     {
-      "id": "g5-commerce-knowledge",
+      "id": "g6-commerce-knowledge",
       "agent": "db",
       "title": "建设积分账本与 5/20 GB 私有知识空间",
       "description": "复用既有权益真值，落实幂等计费、管理员发放、usage 对账和私有 OSS 配额。",
       "priority": 4,
-      "dependencies": ["g1-turn", "g2-identity-trial", "g3-grounded-answer"],
+      "dependencies": ["g1-turn", "g3-identity-trial", "g4-grounded-answer"],
       "scope": ["new-api/model/", "new-api/controller/", "new-api/common/"],
       "acceptance_criteria": ["充值、发放、预留、消费、退款可审计、幂等并关联 requestId。", "普通用户 5 GB、会员 20 GB 由服务端强制且并发不超额。", "对象跨账号不可读；替换和删除能释放配额。"]
     },
     {
-      "id": "g6-own-device",
+      "id": "g7-own-device",
       "agent": "backend",
       "title": "按需连接本人设备上的 CLI/MCP",
       "description": "用户明确选设备后执行获准能力，限制目录、参数并要求写入确认。",
       "priority": 4,
-      "dependencies": ["g1-turn", "g2-identity-trial", "g3-grounded-answer"],
+      "dependencies": ["g1-turn", "g3-identity-trial", "g4-grounded-answer"],
       "scope": ["new-api/controller/agent/", "deepseek-harness/packages/api/"],
       "acceptance_criteria": ["服务端和设备端验证 owner、能力和目录。", "副作用操作须确认；撤销立即生效；断线不自动重放。", "设备离线不影响网站功能；不共享或重启 A7A。"]
-    },
-    {
-      "id": "g7-runtime-gate",
-      "agent": "architecture",
-      "title": "用相同任务矩阵评估 DSH 是否接管生产循环",
-      "description": "在受保护入口比较线上基线和最小 DSH 配置的正确性、隔离、恢复与资源成本。",
-      "priority": 5,
-      "dependencies": ["g1-turn", "g2-identity-trial", "g3-grounded-answer", "g4-client-mobile"],
-      "scope": ["new-api/controller/agent/", "deepseek-harness/packages/api/"],
-      "acceptance_criteria": ["同一组对话、工具、附件、跨账号和故障用例通过。", "记录空闲/并发资源；站点能力不开放共享 shell、主机文件和任意路径。", "通过才渐进切流；不通过保留基线，不阻塞用户流程。"]
     },
     {
       "id": "g8-release",
@@ -97,7 +97,7 @@
       "title": "按六项结果完成端到端放行",
       "description": "核验 Actions、隔离、商业权益、手机体验、设备离线和真实浏览器路径。",
       "priority": 6,
-      "dependencies": ["g0-chat", "g2-identity-trial", "g3-grounded-answer", "g4-client-mobile", "g5-commerce-knowledge", "g6-own-device", "g7-runtime-gate"],
+      "dependencies": ["g0-chat", "g2-dsh-runtime", "g3-identity-trial", "g4-grounded-answer", "g5-client-mobile", "g6-commerce-knowledge", "g7-own-device"],
       "scope": ["new-api/", "deepseek-harness/"],
       "acceptance_criteria": ["六项结果都有代码版本、Actions run 和浏览器记录。", "匿名限额、双账号、工具来源、附件、费用/配额幂等和手机流程通过。", "部署版本可核对并能回滚；未部署或未实测项不标为完成。"]
     }
@@ -106,7 +106,7 @@
     {
       "name": "Site Agent Run",
       "method": "POST",
-      "endpoint": "站点认证产品接口，最终路由以现有 API 审计为准",
+      "endpoint": "浏览器只访问 Lain42 产品服务；服务端校验主体后经内网将 turn 交给 DSH，再由 DSH 通过 New API 请求模型",
       "request": {"conversationId": "服务端所有的不透明 ID", "turnId": "用户轮次 ID", "requestId": "幂等及计费关联 ID", "message": "当前输入", "attachments": "用户确认的有界引用", "approvedCapabilities": "明确批准的能力"},
       "response": {"runId": "唯一执行 ID", "events": "有序状态/模型/工具/来源/usage/完成或失败事件"},
       "headers": {"authentication": "网站会话或受限匿名会话", "identity": "服务端推导；不信任客户端 userId/workspaceId/cwd"}
@@ -114,7 +114,7 @@
     {
       "name": "Private Runtime Invocation",
       "method": "POST",
-      "endpoint": "仅内网；仅在 DSH 试点继续时启用",
+      "endpoint": "仅内网；目标 DSH 运行时通过短时授权断言调用",
       "request": {"protocolVersion": "版本化 schema", "principalAssertion": "短时签名主体和允许能力", "conversationId": "服务端核验映射", "turnId": "幂等轮次", "requestId": "用量关联"},
       "response": {"runId": "唯一执行者", "eventSequence": "有序可恢复事件", "usage": "关联 requestId 的模型用量"},
       "headers": {"authorization": "服务端凭据；不转交浏览器 bearer token"}
