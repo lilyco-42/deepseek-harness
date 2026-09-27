@@ -28,10 +28,9 @@ interface Lain42TurnRequest {
   readonly text: string
 }
 
-interface TurnResult {
-  readonly answer?: string
-  readonly failure?: 'not-found' | 'failed'
-}
+type TurnResult =
+  | { readonly answer: string }
+  | { readonly failure: 'not-found' | 'failed' }
 
 interface SessionEventRecord {
   readonly type: string
@@ -137,7 +136,7 @@ async function handleTurn(
       writeJson(response, 502, { error: 'agent_turn_unavailable' })
       return
     }
-    if (result.failure === 'failed' || result.answer === undefined) {
+    if (result.failure === 'failed') {
       writeJson(response, 502, { error: 'agent_turn_failed' })
       return
     }
@@ -256,8 +255,7 @@ function verifySignature(
     || nonce === undefined || !/^[0-9a-f]{32}$/.test(nonce)
     || signature === undefined || !/^[0-9a-f]{64}$/.test(signature)) return false
   const parsedTimestamp = Number(timestamp)
-  if (!Number.isSafeInteger(parsedTimestamp)
-    || Math.abs(nowSeconds - parsedTimestamp) > SIGNATURE_WINDOW_SECONDS) return false
+  if (Math.abs(nowSeconds - parsedTimestamp) > SIGNATURE_WINDOW_SECONDS) return false
   for (const [seen, expiry] of nonces) {
     if (expiry <= nowSeconds) nonces.delete(seen)
   }
@@ -272,10 +270,10 @@ function verifySignature(
 async function readBody(request: IncomingMessage): Promise<Buffer> {
   const declaredLength = Number(request.headers['content-length'])
   if (Number.isFinite(declaredLength) && declaredLength > BODY_LIMIT_BYTES) throw new BodyLimitError()
-  const chunks: Uint8Array[] = []
+  const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
-    const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk)
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : Buffer.from(chunk)
     size += bytes.byteLength
     if (size > BODY_LIMIT_BYTES) throw new BodyLimitError()
     chunks.push(bytes)
