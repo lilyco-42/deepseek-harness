@@ -60,7 +60,7 @@ DSH 是目标对话与工具循环，New API 保留现有网站身份、授权�
 ### G4：发布门与渐进切换
 G0–G3 的行为回归通过 Actions；真实浏览器完成普通聊天、搜索/URL/GitHub、附件三组流程；双账号隔离、设备离线独立性、额度和工具幂等、回滚证据齐全。通过后只按测试账号小批切流，旧路径保留到对账完成。
 
-最近 DSH UI flaky e2e 修复 commit e798007de9a574303c05f6ed5da15da7bbed940f 的 Actions 已通过；这只证明对应测试修复，不代表 G0–G4 已完成或已部署。
+最近 DSH UI flaky e2e 修复的 [GitHub Actions](https://github.com/lilyco-42/deepseek-harness/actions) 已通过；这只证明对应测试修复，不代表 G0–G4 已完成或已部署。
 
 ## 放行后再做
 
