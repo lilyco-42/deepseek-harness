@@ -32,7 +32,7 @@ const servers: Server[] = []
 let nonceCounter = 0
 
 afterEach(async () => {
-    await Promise.all(servers.splice(0).map(active => new Promise<void>((resolve) => {
+  await Promise.all(servers.splice(0).map(active => new Promise<void>((resolve) => {
     active.close(() => { resolve() })
   })))
   vi.restoreAllMocks()
