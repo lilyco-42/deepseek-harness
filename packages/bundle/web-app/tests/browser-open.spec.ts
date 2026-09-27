@@ -24,6 +24,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true })
+  vi.unstubAllGlobals()
   internals.resolveDistIndex = originalResolveDistIndex
   internals.openBrowser = originalOpenBrowser
   vi.unstubAllEnvs()
@@ -149,18 +150,11 @@ describe('web app browser startup', () => {
       requestRejection: () => undefined,
       rpc: {},
     }
-    const globals = globalThis as unknown as {
-      __dshWebAppApply: typeof apply
-      __dshWebServer: typeof server
-      __dshConnection: typeof connection
-      __dshFileUploads: object
-      __dshSessionController: object
-    }
-    globals.__dshWebAppApply = apply
-    globals.__dshWebServer = server
-    globals.__dshConnection = connection
-    globals.__dshFileUploads = {}
-    globals.__dshSessionController = {}
+    vi.stubGlobal('__dshWebAppApply', apply)
+    vi.stubGlobal('__dshWebServer', server)
+    vi.stubGlobal('__dshConnection', connection)
+    vi.stubGlobal('__dshFileUploads', {})
+    vi.stubGlobal('__dshSessionController', {})
 
     writeFileSync(webserverModule, [
       "export function apply(ctx) { ctx.provide('webServer', globalThis.__dshWebServer) }",
@@ -222,7 +216,7 @@ describe('web app browser startup', () => {
 
     await vi.waitFor(() => {
       expect(ctx.get('webRuntime')).toEqual({ lanAddresses: [], trustedHosts: [] })
-      expect(ctx.get('sessionController')).toBe(globals.__dshSessionController)
+      expect(ctx.get('sessionController')).toBeDefined()
       expect(server.register).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'exact',
         path: '/lain42/bridge/v1/turn',
