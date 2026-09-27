@@ -493,7 +493,7 @@ async function post(baseUrl: string, body: Buffer, timestamp = currentTimestamp(
   return fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
     method: 'POST',
     headers: signedHeaders(body, timestamp, nonce),
-    body,
+    body: Uint8Array.from(body),
   })
 }
 

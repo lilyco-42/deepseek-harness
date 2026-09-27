@@ -132,12 +132,10 @@ async function handleTurn(
       content: [{ type: 'text', text: turnRequest.text }],
     }, controller.signal)
     const result = await collectTurn(sessionController, sessionId, requestId, controller.signal)
-    if (result.failure === 'not-found') {
-      writeJson(response, 502, { error: 'agent_turn_unavailable' })
-      return
-    }
-    if (result.failure === 'failed') {
-      writeJson(response, 502, { error: 'agent_turn_failed' })
+    if ('failure' in result) {
+      writeJson(response, 502, {
+        error: result.failure === 'not-found' ? 'agent_turn_unavailable' : 'agent_turn_failed',
+      })
       return
     }
     writeJson(response, 200, { version: 1, requestId: turnRequest.requestId, answer: result.answer })
