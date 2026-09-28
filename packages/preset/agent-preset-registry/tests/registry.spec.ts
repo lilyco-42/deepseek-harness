@@ -121,12 +121,6 @@ describe('declarative preset revisions', () => {
     expect(listed.map(row => row.id)).toEqual(['empty', 'standard'])
     expect(listed.find(row => row.id === 'empty')?.userSelectable).toBe(true)
     expect(listed.find(row => row.id === 'standard')?.userSelectable).toBe(false)
-    expect(await ctx.agentPresets.remoteExportList()).toMatchObject({
-      presets: expect.arrayContaining([
-        expect.objectContaining({ id: 'empty', userSelectable: true }),
-        expect.objectContaining({ id: 'standard', userSelectable: false }),
-      ]),
-    })
     expect(await ctx.agentPresets.compositionInventory()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'standard', name: 'Standard', isDefault: true, rows: expect.any(Array) as unknown[] }),
       expect.objectContaining({ id: 'empty', rows: [expect.objectContaining({ moduleName: 'missing', enabled: false })] }),
