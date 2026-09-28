@@ -5,10 +5,12 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import * as lain42Tools from '../src/lain42-tools.ts'
 
 const SECRET = 'test-only-lain42-tool-relay-secret-with-32-bytes'
 const SESSION_ID = brandString<SessionId>('A'.repeat(64))
+const agent = { id: SESSION_ID } as unknown as NonNullable<ToolRunContext['agent']>
 
 describe('Lain42 account tool relay', () => {
   afterEach(() => {
@@ -50,7 +52,7 @@ describe('Lain42 account tool relay', () => {
         name: 'lain42_github_repositories',
         arguments: { limit: 4 },
         signal: new AbortController().signal,
-        agent: { id: SESSION_ID },
+        agent,
       })
       expect(result.isError).toBe(false)
       expect(result.content.map(block => block.type === 'text' ? block.text : '').join('')).toContain('lilyco-42/rembg-ui')
@@ -89,7 +91,7 @@ describe('Lain42 account tool relay', () => {
         name: 'lain42_web_search',
         arguments: { query: 'Rust web agent' },
         signal: new AbortController().signal,
-        agent: { id: SESSION_ID },
+        agent,
       })
       const rendered = result.content.map(block => block.type === 'text' ? block.text : '').join('')
       expect(result.isError).toBe(false)
@@ -120,7 +122,7 @@ describe('Lain42 account tool relay', () => {
         name: 'lain42_web_fetch',
         arguments: { url: 'https://example.com/article' },
         signal: new AbortController().signal,
-        agent: { id: SESSION_ID },
+        agent,
       })
       const rendered = result.content.map(block => block.type === 'text' ? block.text : '').join('')
       expect(result.isError).toBe(false)
