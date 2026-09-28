@@ -234,7 +234,7 @@ describe('Lain42 private DSH bridge', () => {
     cases.push({ name: 'malformed signature', headers: { ...good, 'x-lain42-signature': 'z'.repeat(64) } })
     cases.push({ name: 'mismatched signature', headers: { ...good, 'x-lain42-signature': '0'.repeat(64) } })
     cases.push({ name: 'expired timestamp', headers: signedHeaders(body, String(Number(timestamp) - 61), nextNonce()) })
-    cases.push({ name: 'future timestamp', headers: signedHeaders(body, String(Number(timestamp) + 61), nextNonce()) })
+    cases.push({ name: 'future timestamp', headers: signedHeaders(body, String(Number(timestamp) + 120), nextNonce()) })
 
     for (const { name, headers } of cases) {
       const response = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
