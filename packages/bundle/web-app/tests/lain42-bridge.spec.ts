@@ -308,6 +308,8 @@ describe('Lain42 private DSH bridge', () => {
       jsonBody({ ...valid, text: 7 }),
       jsonBody({ ...valid, text: ' \n ' }),
       jsonBody({ ...valid, text: 'x'.repeat(25 * 1024) }),
+      jsonBody({ ...valid, model: 7 }),
+      jsonBody({ ...valid, model: 'model with spaces' }),
     ]
 
     for (const body of cases) {
