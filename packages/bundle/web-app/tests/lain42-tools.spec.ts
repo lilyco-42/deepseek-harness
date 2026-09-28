@@ -11,7 +11,7 @@ import * as lain42Tools from '../src/lain42-tools.ts'
 const SECRET = 'test-only-lain42-tool-relay-secret-with-32-bytes'
 const RELAY_URL = 'https://api.lain42.top/api/agent/bridge/v1/tool'
 const SESSION_ID = brandString<SessionId>('A'.repeat(64))
-const agent = { id: SESSION_ID } as unknown as NonNullable<ToolRunContext['agent']>
+const agent = { id: SESSION_ID } as NonNullable<ToolRunContext['agent']>
 
 async function createToolContext() {
   const ctx = new Context()
@@ -24,10 +24,7 @@ async function createToolContext() {
 function registeredTool(ctx: Context, name: string) {
   const tool = ctx.tools.get(name)
   if (tool === undefined) throw new Error(`Missing test tool: ${name}`)
-  return tool as unknown as {
-    execute(args: Record<string, unknown>, context: ToolRunContext): Promise<unknown>
-    isConcurrencySafe?: () => boolean
-  }
+  return tool
 }
 
 function executionContext(
@@ -229,7 +226,7 @@ describe('Lain42 account tool relay', () => {
       vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
       const missingSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, undefined))
       expect(JSON.parse(String(missingSession))).toMatchObject({ error: { code: 'session_unavailable' } })
-      const malformedSession = { id: 'short' } as unknown as NonNullable<ToolRunContext['agent']>
+      const malformedSession = { id: brandString<SessionId>('short') } as NonNullable<ToolRunContext['agent']>
       const invalidSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, malformedSession))
       expect(JSON.parse(String(invalidSession))).toMatchObject({ error: { code: 'session_unavailable' } })
 
