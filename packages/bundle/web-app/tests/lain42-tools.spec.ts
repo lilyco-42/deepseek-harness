@@ -372,7 +372,7 @@ describe('Lain42 account tool relay', () => {
       ]
       for (const [name, args] of toolArguments) {
         const tool = registeredTool(ctx, name)
-        expect(tool.isConcurrencySafe?.()).toBe(true)
+        expect(tool.isConcurrencySafe?.(executionContext())).toBe(true)
         const output = parseRelayResult(await tool.execute(args, executionContext()))
         expect(output.result).toMatchObject({ tool: expect.any(String) })
       }

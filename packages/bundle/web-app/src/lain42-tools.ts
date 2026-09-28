@@ -23,7 +23,16 @@ interface RelayRequest {
   arguments: Record<string, unknown>
 }
 
-/** Signer is exported for wire-contract tests; the shared secret stays server-side. */
+/**
+ * Sign one read-only tool relay request using the server-shared HMAC contract.
+ * The shared secret remains on the server; this export exists for wire-contract tests.
+ *
+ * @param secret - server-owned relay secret used as the HMAC key.
+ * @param timestamp - request timestamp included in the canonical signing string.
+ * @param nonce - unique request nonce included in the canonical signing string.
+ * @param body - exact serialized request bytes whose digest is signed.
+ * @returns hexadecimal HMAC-SHA256 signature for the request.
+ */
 export function signLain42ToolRequest(secret: string, timestamp: string, nonce: string, body: Buffer): string {
   const digest = createHash('sha256').update(body).digest('hex')
   const canonical = `v1\n${timestamp}\n${nonce}\nPOST\n${RELAY_PATH}\n${digest}`
