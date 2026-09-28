@@ -139,6 +139,26 @@ function outputText() {
   }
 }
 
+function repositoryReadTool(
+  name: string,
+  collection: 'issues' | 'pull requests',
+  relayTool: 'github_issues' | 'github_pull_requests',
+) {
+  return defineTool({
+    name,
+    description: `Read ${collection} from a GitHub repository visible to the connected website account.`,
+    parameters: {
+      repo: { type: 'string', required: true, description: 'Repository in owner/name form.' },
+      state: { type: 'string', description: 'Optional open, closed, or all; defaults to open.' },
+      limit: { type: 'integer', description: 'Optional number of results from 1 to 20.' },
+    },
+    output: outputText(),
+    timeoutMs: RELAY_TIMEOUT_MS,
+    isConcurrencySafe: () => true,
+    execute: (args, exec) => callRelay(relayTool, args as Record<string, unknown>, exec),
+  })
+}
+
 /** Register this plugin only inside the lain42-web agent preset. */
 export function apply(ctx: Context): void {
   ctx.systemPrompt.section({
@@ -197,32 +217,8 @@ export function apply(ctx: Context): void {
       isConcurrencySafe: () => true,
       execute: (args, exec) => callRelay('github_repositories_search', args as Record<string, unknown>, exec),
     }),
-    defineTool({
-      name: 'lain42_github_issues',
-      description: 'Read issues from a GitHub repository visible to the connected website account.',
-      parameters: {
-        repo: { type: 'string', required: true, description: 'Repository in owner/name form.' },
-        state: { type: 'string', description: 'Optional open, closed, or all; defaults to open.' },
-        limit: { type: 'integer', description: 'Optional number of results from 1 to 20.' },
-      },
-      output: outputText(),
-      timeoutMs: RELAY_TIMEOUT_MS,
-      isConcurrencySafe: () => true,
-      execute: (args, exec) => callRelay('github_issues', args as Record<string, unknown>, exec),
-    }),
-    defineTool({
-      name: 'lain42_github_pull_requests',
-      description: 'Read pull requests from a GitHub repository visible to the connected website account.',
-      parameters: {
-        repo: { type: 'string', required: true, description: 'Repository in owner/name form.' },
-        state: { type: 'string', description: 'Optional open, closed, or all; defaults to open.' },
-        limit: { type: 'integer', description: 'Optional number of results from 1 to 20.' },
-      },
-      output: outputText(),
-      timeoutMs: RELAY_TIMEOUT_MS,
-      isConcurrencySafe: () => true,
-      execute: (args, exec) => callRelay('github_pull_requests', args as Record<string, unknown>, exec),
-    }),
+    repositoryReadTool('lain42_github_issues', 'issues', 'github_issues'),
+    repositoryReadTool('lain42_github_pull_requests', 'pull requests', 'github_pull_requests'),
   ]
   const disposers = registration.map(tool => ctx.tools.register(tool))
   ctx.effect(() => () => { for (const dispose of disposers.reverse()) dispose() }, 'Lain42 account tools')
