@@ -399,12 +399,9 @@ describe('Lain42 private DSH bridge', () => {
 
     const nonErrorWarning = vi.fn()
     const nonErrorController = inactiveSessionController()
-    const nonErrorRejection = Promise.resolve({
-      then(_resolve: unknown, reject: (reason: unknown) => void) {
-        reject({ reason: 'private upstream detail' })
-      },
-    } as PromiseLike<never>)
-    nonErrorController.create = vi.fn(async () => nonErrorRejection)
+    nonErrorController.create = vi.fn(async () => {
+      throw { reason: 'private upstream detail' }
+    })
     const nonErrorUrl = await listen(createLain42BridgeHandler(nonErrorController, SECRET, nonErrorWarning))
     const nonError = await post(nonErrorUrl, jsonBody(validRequest()))
     expect(nonError.status).toBe(502)
