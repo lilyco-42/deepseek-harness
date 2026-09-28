@@ -245,6 +245,10 @@ describe('Lain42 account tool relay', () => {
       expect(parseRelayResult(defaultResult)).toEqual({ version: 1, result: { ok: true } })
       expect(requestedUrl).toBe(RELAY_URL)
 
+      delete process.env.LAIN42_DSH_BRIDGE_SECRET
+      const missingSecret = await tool.execute({ query: 'test' }, executionContext())
+      expect(parseRelayResult(missingSecret)).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
+
       vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', 'short')
       const unconfigured = await tool.execute({ query: 'test' }, executionContext())
       expect(parseRelayResult(unconfigured)).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
