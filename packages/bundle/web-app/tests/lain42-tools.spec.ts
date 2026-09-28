@@ -55,8 +55,13 @@ function parseRelayResult(value: unknown): Record<string, unknown> {
 }
 
 function readRelayToolName(body: BodyInit | null | undefined): string {
-  if (typeof body !== 'string') throw new Error('Expected a JSON tool request body.')
-  const parsed = parseRelayResult(body)
+  const text = typeof body === 'string'
+    ? body
+    : body instanceof Uint8Array
+      ? Buffer.from(body).toString('utf8')
+      : undefined
+  if (text === undefined) throw new Error('Expected a JSON tool request body.')
+  const parsed = parseRelayResult(text)
   if (typeof parsed.tool !== 'string') throw new Error('Expected a tool name in the request.')
   return parsed.tool
 }
