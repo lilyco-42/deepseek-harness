@@ -38,7 +38,10 @@ function executionContext(
 }
 
 function responseWith(value: unknown, status = 200, headers?: HeadersInit) {
-  return new Response(typeof value === 'string' ? value : JSON.stringify(value), { status, headers })
+  return new Response(
+    typeof value === 'string' ? value : JSON.stringify(value),
+    { status, ...(headers === undefined ? {} : { headers }) },
+  )
 }
 
 describe('Lain42 account tool relay', () => {
