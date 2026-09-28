@@ -81,11 +81,14 @@ describe('web e2e: requested SVG is explicitly delivered', () => {
   it('writes valid SVG and provides the requested file card before the final reply', async () => {
     const prompts = MODE === 'record' ? [RECORD_PROMPT] : fixtureUserPrompts(await readFile(FIXTURE, 'utf8'))
     expect(prompts).toHaveLength(1)
+    const connectionWarningStart = tripwire.warnings.length
     const settled = scaffold.whenTurnSettled()
     const input = page.locator('[data-composer-input]').first()
     await input.fill(prompts[0]!)
     await input.press('Enter')
     const sessionId = await settled
+    // This scenario verifies delivery. A later idle reconnect is covered independently by connection-recovery.e2e.ts.
+    expect(tripwire.warnings.slice(connectionWarningStart), connectionDiagnostics.join('\n')).toEqual([])
     const session = scaffold.ctx.agents.get(sessionId)?.session
     if (session?.header.cwd === undefined) throw new Error('SVG Session has no workspace')
     cwd = session.header.cwd
@@ -123,7 +126,6 @@ describe('web e2e: requested SVG is explicitly delivered', () => {
     // The scaffold workspace is not a git repository, so the changed-files card lists the written SVG from the write call alone.
     expect(await page.locator('[data-changed-files]').count()).toBe(1)
     expect(tripwire.pageErrors).toEqual([])
-    expect(tripwire.warnings, connectionDiagnostics.join('\n')).toEqual([])
   })
 
   it.skipIf(MODE === 'record')('replays the delivered file and Chinese conversation', async () => {
