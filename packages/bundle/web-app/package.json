@@ -34,13 +34,13 @@
   "files": [
     "lib/index.js",
     "lib/startup.js",
-    "lib/types/lain42-tools.js",
     "cordis.patch.yml",
     "presets/standard.patch.yml",
     "presets/ptc.patch.yml",
     "presets/minimal.patch.yml",
     "presets/cordis.patch.yml",
     "presets/lain42-web.patch.yml",
+    "lib/types/**/*.js",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",
