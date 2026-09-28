@@ -66,11 +66,13 @@ dsh --profile web --no-open --port 8080
 
 每个浏览器会话选择一个随发行版交付的 preset（默认 `standard`）。Agent 预设设置页可更改默认项并编辑预设的子插件；保存结果持久化到 `$DSH_HOME/profiles/web/cordis.patch.yml`。只有 Host 提供可编辑的 profile 时，Creator 的插件管理工具才会启用。
 
-`lain42-web` 预设供 Lain42 服务端控制面创建会话时使用。它不开放网页、shell、文件系统、本机桌面、插件管理或子 Agent 工具；浏览器端搜索和 WASM 网页读取作为有界且不可信的上下文传入。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
+`lain42-web` 预设供 Lain42 服务端控制面创建会话时使用。它提供少量按账号隔离的只读网页与 GitHub 工具，但不开放 shell、文件系统、本机桌面、插件管理或子 Agent 工具。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
 
 ### Lain42 私有控制面接口
 
 `enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本和可选模型名。路由固定使用 `agentPreset: 'lain42-web'` 与 `lain42-web` 模型 provider，不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，尚不支持流式传输或文件附件。
+
+该 preset 还会挂载 `@deepseek-ai/dsh-web-app/lain42-tools`。中继默认使用 `https://api.lain42.top/api/agent/bridge/v1/tool`；只有切换到其他环境时才需要用 `LAIN42_AGENT_TOOL_RELAY_URL` 覆盖。DSH 服务使用已有的 `LAIN42_DSH_BRIDGE_SECRET` 为有界请求签名。New API 验证 HMAC 和一次性 nonce 后，根据已保存的 DSH 会话归属解析 Lain42 账号，并仅执行指定的只读搜索、网页读取、仓库、Issue 或 PR 操作。GitHub OAuth 令牌留在 New API，按解析出的账号选择，不会发送到 DSH 或浏览器。公开网页和仓库内容都作为不可信模型输入。如果中继 URL 或共享密钥无效，工具会返回可操作的服务不可用提示，不会让普通聊天整体停用。
 
 要让模型按账号计费，本 bundle 还会为 `lain42-web` 模型路由提供可选的 `llmRequestHeaders` 解析器。DSH 与 New API 必须设置相同且独立的 `LAIN42_AGENT_MODEL_RELAY_SECRET`（至少 32 字节），再把 provider profile 指向 `https://api.lain42.top/v1/agent`，模型 id 使用 New API 已启用的名称。解析器会为每次请求签署服务端创建的 DSH 会话 id 和模型名称，不会把签名密钥发送到浏览器。New API 会拒绝缺少有效服务端 Agent 会话映射的请求，因此控制面必须在服务端创建映射并传递私有 DSH 会话 id。
 
@@ -84,7 +86,7 @@ dsh --profile web --no-open --port 8080
 <details>
 <summary>实现细节——点击展开</summary>
 
-此 bundle 由一层五个文件的补丁和一个运行时胶水插件组成：`cordis.patch.yml` 承载宿主行和 preset 注册表，每个 `presets/<id>.patch.yml` 插入一条随发行版交付的 preset 声明，按 `dsh.bundle.patch` 列出的顺序应用。存储栈与投影缓存来自 `dsh-base`；Web 叠加层的工作区和消息反馈条目消费共享的 `storageDomain` 服务。补丁重述 base 有意省略的界面专用值，插入 Web 专用宿主条目和浏览器插件列表，再将 Agent 层移到预设后面。胶水插件负责 dist 服务、信任采样、提示词段落、bash 变量和就绪通知。`office-to-pdf` 条目为宿主消费者挂载一个延迟创建引擎的 [Office 转换提供方](../../document/office-to-pdf/README.zh.md)，使用此 bundle 的 Desktop 组合也共享该提供方。 转换服务的 Remote 方法负责预览读取授权，Document Preview 负责 Office 查看器和客户端缓存。
+此 bundle 由补丁层、运行时胶水插件和仅供 Lain42 预设使用的账号工具插件组成：`cordis.patch.yml` 承载宿主行和 preset 注册表，每个 `presets/<id>.patch.yml` 插入一条随发行版交付的 preset 声明，按 `dsh.bundle.patch` 列出的顺序应用。存储栈与投影缓存来自 `dsh-base`；Web 叠加层的工作区和消息反馈条目消费共享的 `storageDomain` 服务。补丁重述 base 有意省略的界面专用值，插入 Web 专用宿主条目和浏览器插件列表，再将 Agent 层移到预设后面。胶水插件负责 dist 服务、信任采样、提示词段落、bash 变量和就绪通知。Lain42 工具插件只会由专用 preset 加载。`office-to-pdf` 条目为宿主消费者挂载一个延迟创建引擎的 [Office 转换提供方](../../document/office-to-pdf/README.zh.md)，使用此 bundle 的 Desktop 组合也共享该提供方。转换服务的 Remote 方法负责预览读取授权，Document Preview 负责 Office 查看器和客户端缓存。
 
 ### patch 语义
 
@@ -104,6 +106,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 |---|---|
 | [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、LAN 信任采样、提示词段落、bash 变量、URL 行、浏览器交接 |
 | [`src/lain42-bridge.ts`](src/lain42-bridge.ts) | Lain42 控制面使用的 HMAC 认证私有对话路由 |
+| [`src/lain42-tools.ts`](src/lain42-tools.ts) | 仅在专用 preset 中注册、经 New API 按账号隔离转发的只读工具 |
 | [`src/lain42-model-relay.ts`](src/lain42-model-relay.ts) | 发往 New API 的会话与模型级签名请求头 |
 | [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--trusted-host`、`--no-open`、`--help` |
 | [`cordis.patch.yml`](cordis.patch.yml) | Web patch：重述的基础值、Web 宿主行、浏览器名录、preset 注册表 |
@@ -111,6 +114,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 | — | 不发布运行时不变式伴生入口；每项贡献（frontend-static 子插件、提示词段落、bashEnv 注册）都会随 fiber 由注册表释放，且每个所属注册表的包负责该关系的不变式；本包不持有需要审计的可变状态。 |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist 解析、回退席位、提示词段落、就绪宣告 |
 | [`tests/lain42-bridge.spec.ts`](tests/lain42-bridge.spec.ts) | 签名桥接请求、有界输入、持久化轮次结果与失败处理 |
+| [`tests/lain42-tools.spec.ts`](tests/lain42-tools.spec.ts) | preset 工具注册、会话绑定请求、签名与安全失败处理 |
 | [`tests/lain42-model-relay.spec.ts`](tests/lain42-model-relay.spec.ts) | 模型中继签名与无效请求处理 |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | 在真实 Loader 树上的命令行解析 |
 | [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN 信任采样 |

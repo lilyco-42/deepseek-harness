@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-web-app",
-  "description": "The dsh browser-surface bundle: the web patch layer over dsh-base plus the runtime glue plugin (frontend dist serving, web-surface prompt, bash runtime variables, URL line)",
+  "description": "The dsh browser-surface bundle: web patch and runtime plugins for frontend serving, browser sessions, and the Lain42 web Agent preset",
   "version": "0.1.7-rc.1",
   "publishConfig": {
     "access": "public"
@@ -22,6 +22,10 @@
       "types": "./lib/types/startup.d.ts",
       "default": "./lib/startup.js"
     },
+    "./lain42-tools": {
+      "types": "./lib/types/lain42-tools.d.ts",
+      "default": "./lib/types/lain42-tools.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./presets/*.patch.yml": "./presets/*.patch.yml",
     "./src/*": "./src/*",
@@ -30,6 +34,7 @@
   "files": [
     "lib/index.js",
     "lib/startup.js",
+    "lib/types/lain42-tools.js",
     "cordis.patch.yml",
     "presets/standard.patch.yml",
     "presets/ptc.patch.yml",
@@ -168,6 +173,7 @@
     "@deepseek-ai/dsh-tool-todo": "workspace:*",
     "@deepseek-ai/dsh-tool-web": "workspace:*",
     "@deepseek-ai/dsh-tool-workflow": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*",
     "@deepseek-ai/dsh-web-frontend": "workspace:*",
     "@deepseek-ai/dsh-workflow-ptc": "workspace:*",
     "@deepseek-ai/dsh-workspace": "workspace:*",

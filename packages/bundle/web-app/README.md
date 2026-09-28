@@ -66,11 +66,13 @@ When you launch `dsh --profile web` over SSH, the URL line still prints but the 
 
 Each browser session selects a shipped preset (`standard` by default). The Agent presets settings page changes the default and edits preset child plugins; saves persist in `$DSH_HOME/profiles/web/cordis.patch.yml`. Creator's plugin-management tool is enabled only when the Host provides an editable profile.
 
-The `lain42-web` preset is for Sessions created by the Lain42 server control plane. It exposes no web, shell, filesystem, native-desktop, plugin-management, or subagent tools; browser-side search and WASM page reads are supplied as bounded, untrusted context by the client. A preset limits Agent capabilities; it does not authenticate website users or authorize access to Sessions. The control plane must resolve each opaque public Session through its own authenticated ownership mapping.
+The `lain42-web` preset is for Sessions created by the Lain42 server control plane. It exposes a small set of account-scoped, read-only web and GitHub tools, but no shell, filesystem, native-desktop, plugin-management, or subagent tools. A preset limits Agent capabilities; it does not authenticate website users or authorize access to Sessions. The control plane must resolve each opaque public Session through its own authenticated ownership mapping.
 
 ### Private Lain42 control-plane bridge
 
 `enableLain42Bridge` adds one `POST /lain42/bridge/v1/turn` route for the authenticated New API backend. It requires `LAIN42_DSH_BRIDGE_SECRET` (at least 32 bytes) and a matching New API server secret. Requests use a timestamped HMAC, a one-use nonce, an opaque Session id, a UUID request id, bounded text, and an optional model name. The route fixes `agentPreset` and the model provider to `lain42-web`; it accepts no provider, directory, or command override. It returns the completed assistant text and does not stream or carry file attachments yet.
+
+The preset also mounts `@deepseek-ai/dsh-web-app/lain42-tools`. The relay defaults to `https://api.lain42.top/api/agent/bridge/v1/tool`; set `LAIN42_AGENT_TOOL_RELAY_URL` only to override it for another environment. The DSH service signs bounded requests with the existing `LAIN42_DSH_BRIDGE_SECRET`. New API verifies the HMAC and one-use nonce, resolves the DSH Session to its stored Lain42 account owner, and executes only the named read-only search, page-fetch, repository, issue, or pull-request operation. GitHub OAuth tokens stay in New API and are selected from the resolved account; they are never sent to DSH or the browser. Public page and repository contents remain untrusted model input. If the relay URL or shared secret is invalid, tools return an actionable service-unavailable result instead of disabling ordinary chat.
 
 For account-billed models, this bundle also provides the optional `llmRequestHeaders` resolver for the `lain42-web` model route. Set the same independent `LAIN42_AGENT_MODEL_RELAY_SECRET` (at least 32 bytes) on DSH and New API, then configure that provider profile to use `https://api.lain42.top/v1/agent` and model ids enabled by New API. The resolver signs the server-owned DSH session id and selected model for each request; it never sends the relay secret to the browser. New API rejects calls without an active server-created Agent session mapping, so the control plane must provision and pass the private DSH session id server-side.
 
@@ -84,7 +86,7 @@ Keep this DSH process on a dedicated server instance bound to loopback or a priv
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The bundle is one patch layer of five files plus one runtime glue plugin: `cordis.patch.yml` carries the host rows and the preset registry, and each `presets/<id>.patch.yml` inserts one shipped preset declaration, applied in the order `dsh.bundle.patch` lists them. The storage stack and projection cache come from `dsh-base`; the web overlay's workspace and message-feedback rows consume that shared `storageDomain` service. The patch restates the surface-specific values the base deliberately omits, inserts the web-only host rows and browser roster, then moves the agent plane behind presets. The glue plugin owns dist serving, trust sampling, prompt sections, the bash variable, and the readiness announcements. The `office-to-pdf` row mounts one lazy [Office conversion provider](../../document/office-to-pdf/README.md) for Host consumers, including Desktop compositions using this bundle. The conversion service's Remote methods authorize preview reads, while Document Preview owns the Office viewer and Client cache.
+The bundle is one patch layer plus the runtime glue plugin and the preset-scoped Lain42 account-tool plugin: `cordis.patch.yml` carries the host rows and the preset registry, and each `presets/<id>.patch.yml` inserts one shipped preset declaration, applied in the order `dsh.bundle.patch` lists them. The storage stack and projection cache come from `dsh-base`; the web overlay's workspace and message-feedback rows consume that shared `storageDomain` service. The patch restates the surface-specific values the base deliberately omits, inserts the web-only host rows and browser roster, then moves the agent plane behind presets. The glue plugin owns dist serving, trust sampling, prompt sections, the bash variable, and the readiness announcements. The Lain42 tool plugin is loaded only by its dedicated preset. The `office-to-pdf` row mounts one lazy [Office conversion provider](../../document/office-to-pdf/README.md) for Host consumers, including Desktop compositions using this bundle. The conversion service's Remote methods authorize preview reads, while Document Preview owns the Office viewer and Client cache.
 
 ### Patch semantics
 
@@ -104,6 +106,7 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 |---|---|
 | [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff |
 | [`src/lain42-bridge.ts`](src/lain42-bridge.ts) | The private HMAC-authenticated turn route used by the Lain42 control plane |
+| [`src/lain42-tools.ts`](src/lain42-tools.ts) | Preset-scoped read-only tools relayed through New API with per-account OAuth isolation |
 | [`src/lain42-model-relay.ts`](src/lain42-model-relay.ts) | Session- and model-scoped signed headers for New API model requests |
 | [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--help` |
 | [`cordis.patch.yml`](cordis.patch.yml) | The web patch: restated base values, web host rows, browser roster, preset registry |
@@ -111,6 +114,7 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 | — | No runtime invariant companion is published; every contribution (frontend-static child plugin, prompt section, bashEnv registration) is registry-disposed with the fiber, and each owning registry's package carries that relation's invariant; the package holds no mutable state of its own to audit. |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | Dist resolution, fallback seat, prompt sections, readiness |
 | [`tests/lain42-bridge.spec.ts`](tests/lain42-bridge.spec.ts) | Signed bridge requests, bounded input, durable turn results, and failure handling |
+| [`tests/lain42-tools.spec.ts`](tests/lain42-tools.spec.ts) | Preset tool registration, session-bound requests, signatures, and safe relay failure |
 | [`tests/lain42-model-relay.spec.ts`](tests/lain42-model-relay.spec.ts) | Model-relay signatures and invalid request handling |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | Command-line parsing over a real Loader tree |
 | [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN-trust sampling |
