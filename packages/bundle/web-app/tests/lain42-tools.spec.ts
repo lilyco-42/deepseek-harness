@@ -41,6 +41,22 @@ function responseWith(value: unknown, status = 200, headers?: HeadersInit) {
   )
 }
 
+function parseRelayResult(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') throw new Error('Expected the tool to return JSON text.')
+  const parsed: unknown = JSON.parse(value)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Expected a JSON object from the tool relay.')
+  }
+  return parsed as Record<string, unknown>
+}
+
+function readRelayToolName(body: BodyInit | null | undefined): string {
+  if (typeof body !== 'string') throw new Error('Expected a JSON tool request body.')
+  const parsed = parseRelayResult(body)
+  if (typeof parsed.tool !== 'string') throw new Error('Expected a tool name in the request.')
+  return parsed.tool
+}
+
 describe('Lain42 account tool relay', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -209,29 +225,30 @@ describe('Lain42 account tool relay', () => {
     vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
     let requestedUrl = ''
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      requestedUrl = String(input)
+      requestedUrl =
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       return responseWith({ version: 1, result: { ok: true } })
     }))
     const { ctx, dispose } = await createToolContext()
     try {
       const tool = registeredTool(ctx, 'lain42_web_search')
       const defaultResult = await tool.execute({ query: 'test' }, executionContext())
-      expect(JSON.parse(String(defaultResult))).toEqual({ version: 1, result: { ok: true } })
+      expect(parseRelayResult(defaultResult)).toEqual({ version: 1, result: { ok: true } })
       expect(requestedUrl).toBe(RELAY_URL)
 
       vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', 'short')
       const unconfigured = await tool.execute({ query: 'test' }, executionContext())
-      expect(JSON.parse(String(unconfigured))).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
+      expect(parseRelayResult(unconfigured)).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
 
       vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
       const missingSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, undefined))
-      expect(JSON.parse(String(missingSession))).toMatchObject({ error: { code: 'session_unavailable' } })
+      expect(parseRelayResult(missingSession)).toMatchObject({ error: { code: 'session_unavailable' } })
       const malformedSession = { id: brandString<SessionId>('short') } as NonNullable<ToolRunContext['agent']>
       const invalidSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, malformedSession))
-      expect(JSON.parse(String(invalidSession))).toMatchObject({ error: { code: 'session_unavailable' } })
+      expect(parseRelayResult(invalidSession)).toMatchObject({ error: { code: 'session_unavailable' } })
 
       const tooLarge = await tool.execute({ query: 'x'.repeat(33 * 1024) }, executionContext())
-      expect(JSON.parse(String(tooLarge))).toMatchObject({ error: { code: 'invalid_arguments' } })
+      expect(parseRelayResult(tooLarge)).toMatchObject({ error: { code: 'invalid_arguments' } })
       expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
     } finally {
       await dispose()
@@ -245,35 +262,35 @@ describe('Lain42 account tool relay', () => {
     try {
       const tool = registeredTool(ctx, 'lain42_web_search')
       vi.stubGlobal('fetch', vi.fn(async () => responseWith({ message: 'private upstream detail' }, 503)))
-      const upstreamFailure = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const upstreamFailure = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(upstreamFailure).toMatchObject({ error: { code: 'tool_relay_failed' } })
       expect(JSON.stringify(upstreamFailure)).not.toContain('private upstream detail')
 
       vi.stubGlobal('fetch', vi.fn(async () => responseWith('not-json')))
-      const invalidJson = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const invalidJson = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(invalidJson).toMatchObject({ error: { code: 'tool_relay_failed' } })
 
       for (const invalidPayload of [null, [], { version: 2, result: {} }, { version: 1 }]) {
         vi.stubGlobal('fetch', vi.fn(async () => responseWith(invalidPayload)))
-        const invalidResponse = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+        const invalidResponse = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
         expect(invalidResponse).toMatchObject({ error: { code: 'tool_relay_failed' } })
       }
 
       vi.stubGlobal('fetch', vi.fn(async () => responseWith({ version: 1, error: { code: 'github_not_connected' } })))
-      const validError = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const validError = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(validError).toEqual({ version: 1, error: { code: 'github_not_connected' } })
 
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ version: 1, result: { ok: true } }), {
         headers: { 'content-length': 'not-a-number' },
       })))
-      const unknownLength = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const unknownLength = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(unknownLength).toEqual({ version: 1, result: { ok: true } })
 
       vi.stubGlobal('fetch', vi.fn(async () => new Response('x', {
         status: 200,
         headers: { 'content-length': String(256 * 1024 + 1) },
       })))
-      const declaredTooLarge = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const declaredTooLarge = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(declaredTooLarge).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
 
       vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
@@ -282,11 +299,11 @@ describe('Lain42 account tool relay', () => {
           controller.close()
         },
       }))))
-      const streamedTooLarge = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const streamedTooLarge = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(streamedTooLarge).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
 
       vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
-      const emptyResponse = JSON.parse(String(await tool.execute({ query: 'test' }, executionContext())))
+      const emptyResponse = parseRelayResult(await tool.execute({ query: 'test' }, executionContext()))
       expect(emptyResponse).toMatchObject({ error: { code: 'tool_relay_failed' } })
     } finally {
       await dispose()
@@ -301,18 +318,18 @@ describe('Lain42 account tool relay', () => {
       const tool = registeredTool(ctx, 'lain42_web_search')
       vi.useFakeTimers()
       vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(new Error('transport detail')), { once: true })
+        init?.signal?.addEventListener('abort', () => { reject(new Error('transport detail')) }, { once: true })
       })))
       const timeoutRequest = tool.execute({ query: 'test' }, executionContext())
       await vi.advanceTimersByTimeAsync(20_000)
-      const timeoutResult = JSON.parse(String(await timeoutRequest))
+      const timeoutResult = parseRelayResult(await timeoutRequest)
       expect(timeoutResult).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
       expect(JSON.stringify(timeoutResult)).not.toContain('transport detail')
 
       vi.useRealTimers()
       const controller = new AbortController()
       vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
+        init?.signal?.addEventListener('abort', () => { reject(new Error('cancelled')) }, { once: true })
       })))
       const cancelledRequest = tool.execute({ query: 'test' }, executionContext(controller.signal))
       controller.abort(new Error('caller cancelled'))
@@ -336,9 +353,9 @@ describe('Lain42 account tool relay', () => {
     vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
     const relayedTools: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { tool: string }
-      relayedTools.push(body.tool)
-      return responseWith({ version: 1, result: { tool: body.tool } })
+      const toolName = readRelayToolName(init?.body)
+      relayedTools.push(toolName)
+      return responseWith({ version: 1, result: { tool: toolName } })
     }))
     const { ctx, dispose } = await createToolContext()
     try {
@@ -356,8 +373,8 @@ describe('Lain42 account tool relay', () => {
       for (const [name, args] of toolArguments) {
         const tool = registeredTool(ctx, name)
         expect(tool.isConcurrencySafe?.()).toBe(true)
-        const output = JSON.parse(String(await tool.execute(args, executionContext())))
-        expect(output.result.tool).toBeDefined()
+        const output = parseRelayResult(await tool.execute(args, executionContext()))
+        expect(output.result).toMatchObject({ tool: expect.any(String) })
       }
       expect(relayedTools).toEqual([
         'web_search', 'web_fetch', 'github_repositories', 'github_repositories_search',
@@ -371,7 +388,7 @@ describe('Lain42 account tool relay', () => {
 
     const empty = await createToolContext()
     try {
-      const getTool = vi.spyOn(empty.ctx.tools, 'get').mockReturnValue(undefined as never)
+      const getTool = vi.spyOn(empty.ctx.tools, 'get').mockReturnValue(undefined)
       expect(renderPrompt(await empty.ctx.systemPrompt.assemble())).not.toContain('Use the Lain42 read-only tools')
       getTool.mockRestore()
     } finally {
