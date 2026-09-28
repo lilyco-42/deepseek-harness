@@ -29,9 +29,9 @@ function registeredTool(ctx: Context, name: string) {
 
 function executionContext(
   signal: AbortSignal = new AbortController().signal,
-  selectedAgent: ToolRunContext['agent'] = agent,
+  selectedAgent: ToolRunContext['agent'] | null = agent,
 ): ToolRunContext {
-  return { signal, agent: selectedAgent } as ToolRunContext
+  return selectedAgent === null ? { signal } as ToolRunContext : { signal, agent: selectedAgent } as ToolRunContext
 }
 
 function responseWith(value: unknown, status = 200, headers?: HeadersInit) {
@@ -245,7 +245,7 @@ describe('Lain42 account tool relay', () => {
       expect(parseRelayResult(unconfigured)).toMatchObject({ error: { code: 'tool_relay_unavailable' } })
 
       vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
-      const missingSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, undefined))
+      const missingSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, null))
       expect(parseRelayResult(missingSession)).toMatchObject({ error: { code: 'session_unavailable' } })
       const malformedSession = { id: brandString<SessionId>('short') } as NonNullable<ToolRunContext['agent']>
       const invalidSession = await tool.execute({ query: 'test' }, executionContext(new AbortController().signal, malformedSession))
@@ -376,7 +376,7 @@ describe('Lain42 account tool relay', () => {
       ]
       for (const [name, args] of toolArguments) {
         const tool = registeredTool(ctx, name)
-        expect(tool.isConcurrencySafe?.(executionContext())).toBe(true)
+        expect(tool.isConcurrencySafe?.(args)).toBe(true)
         const output = parseRelayResult(await tool.execute(args, executionContext()))
         if (!isRecord(output.result)) throw new Error('Expected a tool relay result object.')
         expect(typeof output.result.tool).toBe('string')
