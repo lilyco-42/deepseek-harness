@@ -222,23 +222,27 @@ describe('Lain42 private DSH bridge', () => {
     const timestamp = currentTimestamp()
     const nonce = nextNonce()
     const good = signedHeaders(body, timestamp, nonce)
-    const cases: Record<string, string>[] = []
+    const cases: { readonly name: string; readonly headers: Record<string, string> }[] = []
     const missingTimestamp: Record<string, string> = { ...good }
     delete missingTimestamp['x-lain42-timestamp']
-    cases.push(missingTimestamp)
-    cases.push({ ...good, 'x-lain42-timestamp': 'not-a-time' })
-    cases.push({ ...good, 'x-lain42-nonce': 'not-a-nonce' })
+    cases.push({ name: 'missing timestamp', headers: missingTimestamp })
+    cases.push({ name: 'malformed timestamp', headers: { ...good, 'x-lain42-timestamp': 'not-a-time' } })
+    cases.push({ name: 'malformed nonce', headers: { ...good, 'x-lain42-nonce': 'not-a-nonce' } })
     const missingSignature: Record<string, string> = { ...good }
     delete missingSignature['x-lain42-signature']
-    cases.push(missingSignature)
-    cases.push({ ...good, 'x-lain42-signature': 'z'.repeat(64) })
-    cases.push({ ...good, 'x-lain42-signature': '0'.repeat(64) })
-    cases.push(signedHeaders(body, String(Number(timestamp) - 61), nextNonce()))
-    cases.push(signedHeaders(body, String(Number(timestamp) + 61), nextNonce()))
+    cases.push({ name: 'missing signature', headers: missingSignature })
+    cases.push({ name: 'malformed signature', headers: { ...good, 'x-lain42-signature': 'z'.repeat(64) } })
+    cases.push({ name: 'mismatched signature', headers: { ...good, 'x-lain42-signature': '0'.repeat(64) } })
+    cases.push({ name: 'expired timestamp', headers: signedHeaders(body, String(Number(timestamp) - 61), nextNonce()) })
+    cases.push({ name: 'future timestamp', headers: signedHeaders(body, String(Number(timestamp) + 61), nextNonce()) })
 
-    for (const headers of cases) {
-      const response = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, { method: 'POST', headers, body })
-      expect(response.status).toBe(401)
+    for (const { name, headers } of cases) {
+      const response = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: Uint8Array.from(body),
+      })
+      expect(response.status, name).toBe(401)
       await response.arrayBuffer()
     }
     expect(sessionController.create).not.toHaveBeenCalled()
