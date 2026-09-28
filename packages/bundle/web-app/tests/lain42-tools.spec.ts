@@ -41,13 +41,17 @@ function responseWith(value: unknown, status = 200, headers?: HeadersInit) {
   )
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 function parseRelayResult(value: unknown): Record<string, unknown> {
   if (typeof value !== 'string') throw new Error('Expected the tool to return JSON text.')
   const parsed: unknown = JSON.parse(value)
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  if (!isRecord(parsed)) {
     throw new Error('Expected a JSON object from the tool relay.')
   }
-  return parsed as Record<string, unknown>
+  return parsed
 }
 
 function readRelayToolName(body: BodyInit | null | undefined): string {
@@ -374,7 +378,8 @@ describe('Lain42 account tool relay', () => {
         const tool = registeredTool(ctx, name)
         expect(tool.isConcurrencySafe?.(executionContext())).toBe(true)
         const output = parseRelayResult(await tool.execute(args, executionContext()))
-        expect(output.result).toMatchObject({ tool: expect.any(String) })
+        if (!isRecord(output.result)) throw new Error('Expected a tool relay result object.')
+        expect(typeof output.result.tool).toBe('string')
       }
       expect(relayedTools).toEqual([
         'web_search', 'web_fetch', 'github_repositories', 'github_repositories_search',
