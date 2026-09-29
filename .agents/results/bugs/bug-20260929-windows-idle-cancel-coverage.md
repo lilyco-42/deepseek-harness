@@ -13,11 +13,11 @@ The Windows Node 24 exhaustive coverage job failed in `PiAiAdapter provider rout
 
 ## Root Cause
 
-The mock SSE script continued sending delayed events and could close itself normally, so it did not isolate client cancellation from server completion. The assertion also used a one-second bound for loopback socket closure under heavily instrumented, parallel Windows coverage. The test therefore mixed the behavior under test with scheduler timing and a naturally ending response.
+The mock SSE script continued sending delayed events and could close itself normally, so it did not isolate client cancellation from server completion. It also started the idle watchdog at only 20 ms, short enough for a busy Windows coverage runner to time out before the loopback request reached the mock server. The one-second server-close bound further mixed the behavior under test with scheduler timing and a naturally ending response.
 
 ## Fix
 
-Change the fixture to leave the streamed response open after its first event, so only client-side cancellation closes it. Allow five seconds for the Windows runner to observe that close, and force-close mock server connections during cleanup if the assertion fails.
+Change the fixture to leave the streamed response open after its first event, use a one-second idle interval so the request can reach the server first, and allow five seconds for the Windows runner to observe client-side closure. Force-close mock server connections during cleanup if the assertion fails.
 
 ## Files Modified
 

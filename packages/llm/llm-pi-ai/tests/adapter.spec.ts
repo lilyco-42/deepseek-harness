@@ -444,9 +444,11 @@ describe('PiAiAdapter provider routing', () => {
 
   it('stops the SDK request when the adapter idle watchdog expires', async () => {
     // Keep the response open after its first event: the server must observe the
-    // client abort, rather than eventually closing its own scripted stream.
+    // client abort, rather than eventually closing its own scripted stream. A
+    // one-second watchdog leaves time for the loopback request to reach the
+    // server on a heavily loaded coverage worker before measuring stream idle.
     const server = await mockServer([{ events: textEvents, holdOpen: true }])
-    const ctx = await harness(server.url, { streamIdleTimeoutMs: 20 })
+    const ctx = await harness(server.url, { streamIdleTimeoutMs: 1_000 })
 
     const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'TIMEOUT' } })

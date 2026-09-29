@@ -14,7 +14,7 @@ const servers: Server[] = []
 
 /** Close every server opened since the last call; run from each spec's afterEach. */
 export async function closeMockServers(): Promise<void> {
-  await Promise.all(servers.splice(0).map(server => new Promise(resolve => {
+  await Promise.all(servers.splice(0).map(server => new Promise((resolve) => {
     server.close(resolve)
     // A failed cancellation assertion can leave a deliberately open streaming
     // response behind. Destroy connections after stopping new accepts so the
