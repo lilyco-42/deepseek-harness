@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Group from '@deepseek-ai/cordis-plugin-group'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Loader, { type ModuleLoaderV2 } from '@deepseek-ai/cordis-plugin-loader'
 import { loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import AgentPreset from '@deepseek-ai/dsh-agent-preset'
 import AgentPresets from '@deepseek-ai/dsh-agent-preset-registry'
@@ -66,13 +66,19 @@ it('loads each shipped browser preset and exposes only its pinned prompt and acc
     ['@deepseek-ai/dsh-tool-web', ToolWeb],
     ['@deepseek-ai/dsh-web-app/lain42-tools', Lain42Tools],
   ])
-  ctx.loader.internal = {
+  const internal: ModuleLoaderV2 = {
     version: 'v2',
+    loadCache: new Map(),
     async import(specifier: string) {
       if (!modules.has(specifier)) throw new Error(`Unexpected Loader import: ${specifier}`)
       return modules.get(specifier)
     },
-  } as unknown as NonNullable<typeof ctx.loader.internal>
+    register(): never { throw new Error('Unexpected module hook registration') },
+    getOrCreateModuleJob(): never { throw new Error('Unexpected module job creation') },
+    resolveSync(): never { throw new Error('Unexpected synchronous module resolution') },
+    load(): never { throw new Error('Unexpected module load') },
+  }
+  ctx.loader.internal = internal
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
   await ctx.loader.await()
   for (const entry of ctx.loader.entries()) await entry.fiber?.await()
