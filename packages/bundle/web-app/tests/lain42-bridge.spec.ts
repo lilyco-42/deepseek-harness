@@ -27,6 +27,7 @@ import {
 const SECRET = 'test-only-lain42-bridge-secret-with-32-bytes'
 const SESSION_ID = brandString<SessionId>('A'.repeat(64))
 const REQUEST_ID = brandString<SessionRequestId>('123e4567-e89b-42d3-a456-426614174000')
+const ONE_PIXEL_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
 
 const servers: Server[] = []
 let nonceCounter = 0
@@ -101,6 +102,85 @@ describe('Lain42 private DSH bridge', () => {
     expect(sessionController.prompt).toHaveBeenCalledTimes(1)
   })
 
+  it('admits bounded v2 image content through the authenticated Session prompt', async () => {
+    const sessionController = {
+      create: vi.fn(async (request: SessionCreateRequest) => ({
+        sessionId: request.sessionId,
+        agentPreset: request.agentPreset,
+      })),
+      selectModel: vi.fn(async (request: SessionSelectModelRequest) => ({ selected: request })),
+      prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
+        expect(request).toEqual({
+          sessionId: SESSION_ID,
+          requestId: REQUEST_ID,
+          mode: 'queue',
+          content: [
+            { type: 'text', text: 'What is in this picture?' },
+            { type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 },
+          ],
+        })
+        return { accepted: true as const }
+      }),
+      follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
+    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>
+    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const baseUrl = await listen(handler)
+    const body = Buffer.from(JSON.stringify({
+      version: 2,
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      mode: 'general',
+      text: 'What is in this picture?',
+      images: [{ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
+    }))
+    const result = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
+      method: 'POST',
+      headers: signedHeaders(
+        body,
+        String(Math.floor(Date.now() / 1000)),
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+      body,
+    })
+
+    expect(result.status).toBe(200)
+    expect(sessionController.prompt).toHaveBeenCalledOnce()
+  })
+
+  it('rejects malformed or legacy-version image payloads before creating a Session', async () => {
+    const sessionController = inactiveSessionController()
+    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const baseUrl = await listen(handler)
+    const invalid = [
+      { version: 1, images: [{ mediaType: 'image/png', data: 'AA==' }] },
+      { version: 2, images: [{ mediaType: 'image/svg+xml', data: 'PHN2Zz4=' }] },
+      { version: 2, images: [{ mediaType: 'image/png', data: 'not base64' }] },
+      { version: 2, images: [{ mediaType: 'image/png', data: 'AA==', url: 'https://example.com/a.png' }] },
+    ]
+
+    for (const [index, extra] of invalid.entries()) {
+      const body = Buffer.from(JSON.stringify({
+        version: extra.version,
+        sessionId: SESSION_ID,
+        requestId: REQUEST_ID,
+        text: 'Look at this image',
+        images: extra.images,
+      }))
+      const response = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
+        method: 'POST',
+        headers: signedHeaders(
+          body,
+          String(Math.floor(Date.now() / 1000)),
+          `${index.toString(16).padStart(2, '0')}${'c'.repeat(30)}`,
+        ),
+        body,
+      })
+      expect(response.status).toBe(400)
+    }
+
+    expect(sessionController.create).not.toHaveBeenCalled()
+  })
+
   it('rejects bad signatures and signed requests with extra fields before creating a Session', async () => {
     const sessionController = inactiveSessionController()
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
@@ -172,7 +252,7 @@ describe('Lain42 private DSH bridge', () => {
     const declaredOversize = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: Buffer.alloc(32 * 1024 + 1),
+      body: Buffer.alloc(12 * 1024 * 1024 + 1),
     })
     expect(declaredOversize.status).toBe(413)
     expect(await declaredOversize.json()).toEqual({ error: 'invalid_request' })

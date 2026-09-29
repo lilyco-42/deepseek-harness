@@ -70,7 +70,7 @@ dsh --profile web --no-open --port 8080
 
 ### Lain42 私有控制面接口
 
-`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本、可选模型名，以及 `general`、`coding`、`research`、`content` 四种模式之一（兼容旧请求时默认为 `general`）。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，尚不支持流式传输或二进制附件。客户端可以把本地解析后的有界文本附在请求中；二进制附件仍不属于该接口契约。
+`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本、可选模型名，以及 `general`、`coding`、`research`、`content` 四种模式之一（兼容旧请求时默认为 `general`）。v2 请求还可以携带最多 4 张 PNG、JPEG、WebP 或 GIF 图片，解码后合计不超过 8 MiB；图片会先通过 DSH 现有的附件校验，再进入模型请求。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，不支持流式传输或任意二进制附件。
 
 该 preset 还会挂载 `@deepseek-ai/dsh-web-app/lain42-tools`。中继默认使用 `https://api.lain42.top/api/agent/bridge/v1/tool`；只有切换到其他环境时才需要用 `LAIN42_AGENT_TOOL_RELAY_URL` 覆盖。DSH 服务使用已有的 `LAIN42_DSH_BRIDGE_SECRET` 为有界请求签名。New API 验证 HMAC 和一次性 nonce 后，根据已保存的 DSH 会话归属解析 Lain42 账号，并仅执行指定的只读搜索、网页读取、仓库、Issue 或 PR 操作。GitHub OAuth 令牌留在 New API，按解析出的账号选择，不会发送到 DSH 或浏览器。公开网页和仓库内容都作为不可信模型输入。如果中继 URL 或共享密钥无效，工具会返回可操作的服务不可用提示，不会让普通聊天整体停用。
 

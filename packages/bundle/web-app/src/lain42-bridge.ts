@@ -8,13 +8,20 @@ import type {} from '@deepseek-ai/dsh-api-session-controller'
 import type { SessionController } from '@deepseek-ai/dsh-api-session-controller'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { SessionRequestId, SessionFollowFrame } from '@deepseek-ai/dsh-api-session-controller/types'
+import type {
+  SessionFollowFrame,
+  SessionPromptRequest,
+  SessionRequestId,
+} from '@deepseek-ai/dsh-api-session-controller/types'
 
 /** Exact server-only path for HMAC-authenticated Lain42 Agent turns. */
 export const LAIN42_BRIDGE_PATH = '/lain42/bridge/v1/turn'
 
-const BODY_LIMIT_BYTES = 32 * 1024
+const BODY_LIMIT_BYTES = 12 * 1024 * 1024
 const PROMPT_LIMIT_BYTES = 24 * 1024
+const MAX_IMAGES = 4
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024
 const SIGNATURE_WINDOW_SECONDS = 60
 const TURN_TIMEOUT_MS = 120_000
 const FOLLOW_MAX_MESSAGES = 50
@@ -28,14 +35,22 @@ const PRESET_BY_MODE = {
 const NONCE_LIMIT = 10_000
 
 type Lain42AgentMode = keyof typeof PRESET_BY_MODE
+type Lain42ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+
+interface Lain42TurnImage {
+  readonly mediaType: Lain42ImageMediaType
+  /** Canonical standard Base64 bytes; decoded and validated by the Session attachment store. */
+  readonly data: string
+}
 
 interface Lain42TurnRequest {
-  readonly version: 1
+  readonly version: 1 | 2
   readonly sessionId: string
   readonly requestId: string
   readonly model?: string
   readonly mode: Lain42AgentMode
   readonly text: string
+  readonly images?: readonly Lain42TurnImage[]
 }
 
 type TurnResult =
@@ -145,11 +160,19 @@ async function handleTurn(
         model: turnRequest.model,
       })
     }
+    const content: SessionPromptRequest['content'] = [
+      ...(turnRequest.text.trim().length === 0 ? [] : [{ type: 'text' as const, text: turnRequest.text }]),
+      ...(turnRequest.images ?? []).map(image => ({
+        type: 'image' as const,
+        mediaType: image.mediaType,
+        data: image.data,
+      })),
+    ]
     await sessionController.prompt({
       sessionId,
       requestId,
       mode: 'queue',
-      content: [{ type: 'text', text: turnRequest.text }],
+      content,
     }, controller.signal)
     const result = await collectTurn(sessionController, sessionId, requestId, controller.signal)
     if ('failure' in result) {
@@ -239,27 +262,56 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   const keys = Object.keys(record).sort()
   const requiredKeys = ['requestId', 'sessionId', 'text', 'version']
   if (requiredKeys.some(key => !keys.includes(key))
-    || keys.some(key => key !== 'model' && key !== 'mode' && !requiredKeys.includes(key))) return undefined
-  if (record.version !== 1 || typeof record.sessionId !== 'string'
+    || keys.some(key => key !== 'model' && key !== 'mode' && key !== 'images' && !requiredKeys.includes(key))) return undefined
+  if ((record.version !== 1 && record.version !== 2) || typeof record.sessionId !== 'string'
     || !/^[A-Za-z0-9]{64}$/.test(record.sessionId)
     || typeof record.requestId !== 'string'
     // New API derives deterministic UUIDv5 IDs from account-scoped message
     // keys so a retry can recover the already completed DSH turn.
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.requestId)
-    || typeof record.text !== 'string' || record.text.trim().length === 0
+    || typeof record.text !== 'string'
     || Buffer.byteLength(record.text, 'utf8') > PROMPT_LIMIT_BYTES) return undefined
+  const hasImagesField = Object.hasOwn(record, 'images')
+  const images = hasImagesField ? parseImages(record.images) : undefined
+  if (record.version === 1 && hasImagesField) return undefined
+  if (record.version === 2 && (images === undefined || images.length === 0)) return undefined
+  if (record.text.trim().length === 0 && (images?.length ?? 0) === 0) return undefined
   const model = record.model
   if (model !== undefined && (typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model))) return undefined
   const mode = record.mode === undefined ? 'general' : record.mode
   if (typeof mode !== 'string' || !Object.hasOwn(PRESET_BY_MODE, mode)) return undefined
   return {
-    version: 1,
+    version: record.version,
     sessionId: record.sessionId,
     requestId: record.requestId,
     ...(model === undefined ? {} : { model }),
     mode: mode as Lain42AgentMode,
     text: record.text,
+    ...(images === undefined ? {} : { images }),
   }
+}
+
+function parseImages(value: unknown): readonly Lain42TurnImage[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_IMAGES) return undefined
+  const images: Lain42TurnImage[] = []
+  let totalBytes = 0
+  for (const item of value) {
+    const record = asRecord(item)
+    if (record === undefined
+      || Object.keys(record).some(key => key !== 'mediaType' && key !== 'data')
+      || (record.mediaType !== 'image/png' && record.mediaType !== 'image/jpeg'
+        && record.mediaType !== 'image/webp' && record.mediaType !== 'image/gif')
+      || typeof record.data !== 'string' || record.data.length === 0
+      || record.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 4) return undefined
+    const data = record.data
+    const decodedBytes = Buffer.from(data, 'base64')
+    if (decodedBytes.byteLength === 0 || decodedBytes.toString('base64') !== data
+      || decodedBytes.byteLength > MAX_IMAGE_BYTES) return undefined
+    totalBytes += decodedBytes.byteLength
+    if (totalBytes > MAX_TOTAL_IMAGE_BYTES) return undefined
+    images.push({ mediaType: record.mediaType, data })
+  }
+  return images
 }
 
 /** Compute the v1 signature sent by the authenticated New API service.
