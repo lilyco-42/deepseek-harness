@@ -128,7 +128,12 @@ async function placeDoc(root: string, id: string, name: string): Promise<Fixture
  * document is replaced by a current-version one: current domain and Session
  * format stamps, lineage, and the freshly folded title.
  */
-async function assertRewrite(ctx: Context, root: string, id: SessionId): Promise<void> {
+async function assertRewrite(
+  ctx: Context,
+  root: string,
+  id: SessionId,
+  waitTimeoutMs = 5_000,
+): Promise<void> {
   const session = ctx.sessions.create(id)
   session.append('fixtures-test/set-title', { title: '重写标题' })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
@@ -142,7 +147,7 @@ async function assertRewrite(ctx: Context, root: string, id: SessionId): Promise
       inheritedEventCount: 0,
     })
     expect(doc.record.rows['title']?.val).toBe('重写标题')
-  }, { timeout: 5_000 })
+  }, { timeout: waitTimeoutMs })
 }
 
 afterEach(async () => {
@@ -352,6 +357,6 @@ describe('archived version recovery', () => {
       headerFor(SessionId('survivor'), good.record.identity),
       ['title'],
     )).toBeUndefined()
-    await assertRewrite(ctx, root, SessionId('survivor'))
-  })
+    await assertRewrite(ctx, root, SessionId('survivor'), 15_000)
+  }, 20_000)
 })

@@ -147,15 +147,51 @@ describe('Lain42 private DSH bridge', () => {
     expect(sessionController.prompt).toHaveBeenCalledOnce()
   })
 
+  it('admits an image-only v2 turn without adding an empty text block', async () => {
+    const sessionController = inactiveSessionController()
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const body = jsonBody({
+      version: 2,
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      mode: 'general',
+      text: '',
+      images: [{ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
+    })
+
+    const response = await post(baseUrl, body)
+
+    expect(response.status).toBe(200)
+    expect(sessionController.prompt).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      mode: 'queue',
+      content: [{ type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
+    }, expect.any(AbortSignal))
+  })
+
   it('rejects malformed or legacy-version image payloads before creating a Session', async () => {
     const sessionController = inactiveSessionController()
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler)
     const invalid = [
       { version: 1, images: [{ mediaType: 'image/png', data: 'AA==' }] },
+      { version: 2, images: null },
+      { version: 2, images: [] },
+      {
+        version: 2,
+        images: Array.from({ length: 5 }, () => ({ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 })),
+      },
       { version: 2, images: [{ mediaType: 'image/svg+xml', data: 'PHN2Zz4=' }] },
       { version: 2, images: [{ mediaType: 'image/png', data: 'not base64' }] },
       { version: 2, images: [{ mediaType: 'image/png', data: 'AA==', url: 'https://example.com/a.png' }] },
+      {
+        version: 2,
+        images: [
+          { mediaType: 'image/png', data: Buffer.alloc(4 * 1024 * 1024).toString('base64') },
+          { mediaType: 'image/png', data: Buffer.alloc(4 * 1024 * 1024 + 1).toString('base64') },
+        ],
+      },
     ]
 
     for (const [index, extra] of invalid.entries()) {
@@ -258,7 +294,7 @@ describe('Lain42 private DSH bridge', () => {
     expect(await declaredOversize.json()).toEqual({ error: 'invalid_request' })
 
     const streamedUrl = await listen(handler, (request) => {
-      overrideRequestBody(request, Buffer.alloc(32 * 1024 + 1))
+      overrideRequestBody(request, Buffer.alloc(12 * 1024 * 1024 + 1))
     })
     const streamedOversize = await fetch(`${streamedUrl}${LAIN42_BRIDGE_PATH}`, {
       method: 'POST',
