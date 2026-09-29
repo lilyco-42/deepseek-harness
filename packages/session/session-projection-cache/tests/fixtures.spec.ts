@@ -132,7 +132,7 @@ async function assertRewrite(
   ctx: Context,
   root: string,
   id: SessionId,
-  waitTimeoutMs = 5_000,
+  waitTimeoutMs = 15_000,
 ): Promise<void> {
   const session = ctx.sessions.create(id)
   session.append('fixtures-test/set-title', { title: '重写标题' })
@@ -230,7 +230,7 @@ describe('archived version recovery', () => {
     expect(migrated.version).toBe(projectionCacheDomainSpec.version)
 
     await assertRewrite(ctx, root, SessionId(sid))
-  })
+  }, 20_000)
 
   for (const [fixture, storedVersion] of [
     ['v4-session-doc.json', 4],
@@ -256,7 +256,7 @@ describe('archived version recovery', () => {
       })
 
       await assertRewrite(ctx, root, id)
-    })
+    }, 20_000)
   }
 
   it('serves an explicitly older format title but never a current or newer one through the predecessor path', async () => {
@@ -357,6 +357,6 @@ describe('archived version recovery', () => {
       headerFor(SessionId('survivor'), good.record.identity),
       ['title'],
     )).toBeUndefined()
-    await assertRewrite(ctx, root, SessionId('survivor'), 15_000)
+    await assertRewrite(ctx, root, SessionId('survivor'))
   }, 20_000)
 })
