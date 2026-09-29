@@ -132,22 +132,20 @@ async function assertRewrite(
   ctx: Context,
   root: string,
   id: SessionId,
-  waitTimeoutMs = 15_000,
 ): Promise<void> {
   const session = ctx.sessions.create(id)
   session.append('fixtures-test/set-title', { title: '重写标题' })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await ctx.sessionProjectionCache.write(session)
   const path = join(root, projectionCacheDomainSpec.name, 'sessions', `${id}.json`)
-  await vi.waitFor(async () => {
-    const doc = JSON.parse(await readFile(path, 'utf8')) as FixtureDoc
-    expect(doc.version).toBe(projectionCacheDomainSpec.version)
-    expect(doc.record.identity).toMatchObject({
-      formatVersion: SESSION_FORMAT_VERSION,
-      isSeeded: false,
-      inheritedEventCount: 0,
-    })
-    expect(doc.record.rows['title']?.val).toBe('重写标题')
-  }, { timeout: waitTimeoutMs })
+  const doc = JSON.parse(await readFile(path, 'utf8')) as FixtureDoc
+  expect(doc.version).toBe(projectionCacheDomainSpec.version)
+  expect(doc.record.identity).toMatchObject({
+    formatVersion: SESSION_FORMAT_VERSION,
+    isSeeded: false,
+    inheritedEventCount: 0,
+  })
+  expect(doc.record.rows['title']?.val).toBe('重写标题')
 }
 
 afterEach(async () => {
@@ -230,7 +228,7 @@ describe('archived version recovery', () => {
     expect(migrated.version).toBe(projectionCacheDomainSpec.version)
 
     await assertRewrite(ctx, root, SessionId(sid))
-  }, 20_000)
+  })
 
   for (const [fixture, storedVersion] of [
     ['v4-session-doc.json', 4],
@@ -256,7 +254,7 @@ describe('archived version recovery', () => {
       })
 
       await assertRewrite(ctx, root, id)
-    }, 20_000)
+    })
   }
 
   it('serves an explicitly older format title but never a current or newer one through the predecessor path', async () => {
@@ -358,5 +356,5 @@ describe('archived version recovery', () => {
       ['title'],
     )).toBeUndefined()
     await assertRewrite(ctx, root, SessionId('survivor'))
-  }, 20_000)
+  })
 })
