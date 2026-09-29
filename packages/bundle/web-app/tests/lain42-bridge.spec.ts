@@ -105,8 +105,8 @@ describe('Lain42 private DSH bridge', () => {
   it('admits bounded v2 image content through the authenticated Session prompt', async () => {
     const sessionController = {
       create: vi.fn(async (request: SessionCreateRequest) => ({
-        sessionId: request.sessionId,
-        agentPreset: request.agentPreset,
+        sessionId: request.sessionId ?? SESSION_ID,
+        agentPreset: request.agentPreset ?? 'general',
       })),
       selectModel: vi.fn(async (request: SessionSelectModelRequest) => ({ selected: request })),
       prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
