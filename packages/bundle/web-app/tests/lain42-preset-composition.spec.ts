@@ -39,11 +39,11 @@ it('loads each shipped browser preset and exposes only its pinned prompt and acc
 
   const fixtureRows = loadOverlayPatches(
     'lain42-agent-test-base',
-    fileURLToPath(new URL('./fixtures/lain42-agent/cordis.yml', import.meta.url))
+    fileURLToPath(new URL('./fixtures/lain42-agent/cordis.yml', import.meta.url)),
   ).flatMap(patch => patch.insert ?? [])
   const presetRows = loadOverlayPatches(
     'lain42-agent-shipped-presets',
-    fileURLToPath(new URL('../presets/lain42-web.patch.yml', import.meta.url))
+    fileURLToPath(new URL('../presets/lain42-web.patch.yml', import.meta.url)),
   ).flatMap(patch => patch.insert ?? [])
   expect(presetRows.map(row => (row.config as { id?: unknown } | undefined)?.id))
     .toEqual(modes.map(row => row.preset))
