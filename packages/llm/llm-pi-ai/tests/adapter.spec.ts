@@ -443,17 +443,20 @@ describe('PiAiAdapter provider routing', () => {
   })
 
   it('stops the SDK request when the adapter idle watchdog expires', async () => {
-    const server = await mockServer([{ events: textEvents, delayMs: 200 }])
+    // Keep the response open after its first event: the server must observe the
+    // client abort, rather than eventually closing its own scripted stream.
+    const server = await mockServer([{ events: textEvents, holdOpen: true }])
     const ctx = await harness(server.url, { streamIdleTimeoutMs: 20 })
 
     const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'TIMEOUT' } })
+    let closeTimeout: ReturnType<typeof setTimeout> | undefined
     await Promise.race([
       server.responseClosed,
       new Promise<never>((_resolve, reject) => {
-        setTimeout(() => { reject(new Error('SDK request did not close after idle timeout')) }, 1_000)
+        closeTimeout = setTimeout(() => { reject(new Error('SDK request did not close after idle timeout')) }, 5_000)
       }),
-    ])
+    ]).finally(() => { if (closeTimeout !== undefined) clearTimeout(closeTimeout) })
 
     expect(server.paths).toEqual(['/chat/completions'])
     expect(server.closedResponses).toBe(1)
