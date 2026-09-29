@@ -568,7 +568,7 @@ TryOpen 'DIRECTORY' '${child}'
       ], 60_000)
       expect(
         result.status,
-        `signal: ${result.signal}\nerror: ${result.error?.message ?? 'none'}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
+        `signal: ${result.signal}\nerror: ${result.error?.message ?? 'none'}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
       ).toBe(0)
       expect(result.stdout).toContain('FILE: OK')
       expect(result.stdout).toContain('NESTED-FILE: OK')

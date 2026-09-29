@@ -19,6 +19,7 @@ Unknown. The current evidence proves a timeout, but does not identify whether Po
 
 - Add flushed `TRY` / `OPENED` markers around each `CreateFileW` probe so a timed-out run identifies the last completed operation.
 - Include `spawnSync` signal, error, stdout, and stderr in the assertion diagnostic.
+- The follow-up CI run `36644644723` caught a missing trailing comma in that diagnostic during `lint:contracts-ready`; the snapshot/artifact tests were skipped by fail-fast and did not report a content mismatch. The comma has been added.
 - Keep the FullControl grant and deny expectation intact; do not weaken or skip this security-boundary test.
 
 ## Files Modified
@@ -28,7 +29,7 @@ Unknown. The current evidence proves a timeout, but does not identify whether Po
 ## Testing
 
 - [x] GitHub Actions run `36640531732` reproduced the Windows-only timeout.
-- [ ] GitHub Actions rerun after adding probe diagnostics.
+- [ ] GitHub Actions rerun after fixing the diagnostic lint error and adding probe diagnostics.
 - Local builds and tests are not run; validation is restricted to GitHub Actions.
 
 ## Prevention
