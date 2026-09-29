@@ -17,7 +17,6 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt, { PERSONA_PREFIX_SECTION } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import * as Lain42Tools from '../src/lain42-tools.ts'
 import { expect, it, onTestFinished } from 'vitest'
 import { expectedLain42AgentPrompts } from './expected/lain42-agent-prompts.ts'
@@ -63,7 +62,6 @@ it('loads each shipped browser preset and exposes only its pinned prompt and acc
     ['@deepseek-ai/dsh-agent-preset-registry', AgentPresets],
     ['@deepseek-ai/dsh-agent-preset', AgentPreset],
     ['@deepseek-ai/dsh-persona', Persona],
-    ['@deepseek-ai/dsh-tool-web', ToolWeb],
     ['@deepseek-ai/dsh-web-app/lain42-tools', Lain42Tools],
   ])
   const internal: ModuleLoaderV2 = {
@@ -85,7 +83,8 @@ it('loads each shipped browser preset and exposes only its pinned prompt and acc
 
   const roster = await ctx.agentPresets.list()
   expect(roster.map(row => row.id)).toEqual(modes.map(({ preset }) => preset))
-  expect(roster.every(row => row.broken === undefined)).toBe(true)
+  expect(roster.map(({ id, broken }) => ({ id, broken })))
+    .toEqual(modes.map(({ preset }) => ({ id: preset, broken: undefined })))
 
   for (const { mode, preset } of modes) {
     const scope = createScope(ctx, {})
