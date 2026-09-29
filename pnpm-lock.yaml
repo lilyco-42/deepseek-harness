@@ -1646,6 +1646,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:~
         version: link:../../../vendor/cordis
+      '@deepseek-ai/cordis-plugin-group':
+        specifier: workspace:~
+        version: link:../../../vendor/group
       '@deepseek-ai/cordis-plugin-include':
         specifier: workspace:~
         version: link:../../../vendor/include
@@ -2690,6 +2693,9 @@ importers:
       '@deepseek-ai/dsh-session-projection':
         specifier: workspace:*
         version: link:../../session/session-projection
+      '@deepseek-ai/dsh-scope':
+        specifier: workspace:*
+        version: link:../../core/scope
       '@deepseek-ai/dsh-shell-env':
         specifier: workspace:*
         version: link:../../shell/shell-env

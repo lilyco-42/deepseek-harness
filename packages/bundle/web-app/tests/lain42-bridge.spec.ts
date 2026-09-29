@@ -45,8 +45,8 @@ describe('Lain42 private DSH bridge', () => {
     const sessionController = {
       create: vi.fn(async (request: SessionCreateRequest) => {
         calls.push('create')
-        expect(request).toEqual({ sessionId: SESSION_ID, agentPreset: 'lain42-web' })
-        return { sessionId: SESSION_ID, agentPreset: 'lain42-web' }
+        expect(request).toEqual({ sessionId: SESSION_ID, agentPreset: 'lain42-web-coding' })
+        return { sessionId: SESSION_ID, agentPreset: 'lain42-web-coding' }
       }),
       selectModel: vi.fn(async (request: SessionSelectModelRequest) => {
         calls.push('selectModel')
@@ -71,6 +71,7 @@ describe('Lain42 private DSH bridge', () => {
       sessionId: SESSION_ID,
       requestId: REQUEST_ID,
       model: 'openai/gpt-5.6-sol',
+      mode: 'coding',
       text: 'What is DeepSeek?',
     }))
     const timestamp = String(Math.floor(Date.now() / 1000))
@@ -204,7 +205,7 @@ describe('Lain42 private DSH bridge', () => {
     expect(await noDeclaredLength.json()).toMatchObject({ answer: 'DeepSeek is an AI company and model family.' })
   })
 
-  it('accepts string stream chunks and decodes their exact UTF-8 request bytes', async () => {
+  it('defaults to the general preset and accepts string stream chunks with exact UTF-8 bytes', async () => {
     const sessionController = inactiveSessionController()
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler, (request) => { request.setEncoding('utf8') })
@@ -213,6 +214,22 @@ describe('Lain42 private DSH bridge', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ answer: 'DeepSeek is an AI company and model family.' })
+    expect(sessionController.create).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      agentPreset: 'lain42-web',
+    })
+  })
+
+  it.each([
+    ['research', 'lain42-web-research'],
+    ['content', 'lain42-web-content'],
+  ] as const)('selects the fixed %s preset', async (mode, agentPreset) => {
+    const sessionController = inactiveSessionController()
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const response = await post(baseUrl, jsonBody({ ...validRequest(), mode }))
+
+    expect(response.status).toBe(200)
+    expect(sessionController.create).toHaveBeenCalledWith({ sessionId: SESSION_ID, agentPreset })
   })
 
   it('rejects missing, malformed, expired, replayed, and mismatched signatures', async () => {
@@ -314,6 +331,7 @@ describe('Lain42 private DSH bridge', () => {
       jsonBody({ ...valid, text: 'x'.repeat(25 * 1024) }),
       jsonBody({ ...valid, model: 7 }),
       jsonBody({ ...valid, model: 'model with spaces' }),
+      jsonBody({ ...valid, mode: 'shell' }),
     ]
 
     for (const body of cases) {

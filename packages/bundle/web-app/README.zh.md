@@ -66,11 +66,11 @@ dsh --profile web --no-open --port 8080
 
 每个浏览器会话选择一个随发行版交付的 preset（默认 `standard`）。Agent 预设设置页可更改默认项并编辑预设的子插件；保存结果持久化到 `$DSH_HOME/profiles/web/cordis.patch.yml`。只有 Host 提供可编辑的 profile 时，Creator 的插件管理工具才会启用。
 
-`lain42-web` 预设供 Lain42 服务端控制面创建会话时使用。它提供少量按账号隔离的只读网页与 GitHub 工具，但不开放 shell、文件系统、本机桌面、插件管理或子 Agent 工具。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
+`lain42-web`、`lain42-web-coding`、`lain42-web-research` 与 `lain42-web-content` 预设供 Lain42 服务端控制面创建会话时使用。它们共享少量按账号隔离的只读网页与 GitHub 工具，但不开放 shell、文件系统、本机桌面、插件管理或子 Agent 工具。如果客户端已经在用户轮次中加入 `[Lain42 browser-fetched evidence]`，Agent 应使用该结果，不要重复读取同一网页。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
 
 ### Lain42 私有控制面接口
 
-`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本和可选模型名。路由固定使用 `agentPreset: 'lain42-web'` 与 `lain42-web` 模型 provider，不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，尚不支持流式传输或文件附件。
+`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本、可选模型名，以及 `general`、`coding`、`research`、`content` 四种模式之一（兼容旧请求时默认为 `general`）。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，尚不支持流式传输或二进制附件。客户端可以把本地解析后的有界文本附在请求中；二进制附件仍不属于该接口契约。
 
 该 preset 还会挂载 `@deepseek-ai/dsh-web-app/lain42-tools`。中继默认使用 `https://api.lain42.top/api/agent/bridge/v1/tool`；只有切换到其他环境时才需要用 `LAIN42_AGENT_TOOL_RELAY_URL` 覆盖。DSH 服务使用已有的 `LAIN42_DSH_BRIDGE_SECRET` 为有界请求签名。New API 验证 HMAC 和一次性 nonce 后，根据已保存的 DSH 会话归属解析 Lain42 账号，并仅执行指定的只读搜索、网页读取、仓库、Issue 或 PR 操作。GitHub OAuth 令牌留在 New API，按解析出的账号选择，不会发送到 DSH 或浏览器。公开网页和仓库内容都作为不可信模型输入。如果中继 URL 或共享密钥无效，工具会返回可操作的服务不可用提示，不会让普通聊天整体停用。
 
@@ -110,7 +110,7 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 | [`src/lain42-model-relay.ts`](src/lain42-model-relay.ts) | 发往 New API 的会话与模型级签名请求头 |
 | [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--trusted-host`、`--no-open`、`--help` |
 | [`cordis.patch.yml`](cordis.patch.yml) | Web patch：重述的基础值、Web 宿主行、浏览器名录、preset 注册表 |
-| [`presets/`](presets) | 每个随发行版交付的 preset（`standard`、`ptc`、`minimal`、`cordis`、`lain42-web`）各一条 `@deepseek-ai/dsh-agent-preset` 声明，各自一个补丁文件 |
+| [`presets/`](presets) | 每个随发行版交付的 preset（`standard`、`ptc`、`minimal`、`cordis` 和四种 `lain42-web*` 模式）各一条 `@deepseek-ai/dsh-agent-preset` 声明，各自一个补丁文件 |
 | — | 不发布运行时不变式伴生入口；每项贡献（frontend-static 子插件、提示词段落、bashEnv 注册）都会随 fiber 由注册表释放，且每个所属注册表的包负责该关系的不变式；本包不持有需要审计的可变状态。 |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist 解析、回退席位、提示词段落、就绪宣告 |
 | [`tests/lain42-bridge.spec.ts`](tests/lain42-bridge.spec.ts) | 签名桥接请求、有界输入、持久化轮次结果与失败处理 |

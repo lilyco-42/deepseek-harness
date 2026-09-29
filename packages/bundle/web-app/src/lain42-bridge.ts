@@ -19,13 +19,22 @@ const SIGNATURE_WINDOW_SECONDS = 60
 const TURN_TIMEOUT_MS = 120_000
 const FOLLOW_MAX_MESSAGES = 50
 const PRESET_ID = 'lain42-web'
+const PRESET_BY_MODE = {
+  general: 'lain42-web',
+  coding: 'lain42-web-coding',
+  research: 'lain42-web-research',
+  content: 'lain42-web-content',
+} as const
 const NONCE_LIMIT = 10_000
+
+type Lain42AgentMode = keyof typeof PRESET_BY_MODE
 
 interface Lain42TurnRequest {
   readonly version: 1
   readonly sessionId: string
   readonly requestId: string
   readonly model?: string
+  readonly mode: Lain42AgentMode
   readonly text: string
 }
 
@@ -78,7 +87,7 @@ export function createLain42BridgeHandler(
   return (request, response) => handleTurn(request, response, sessionController, secret, nonces, logWarning)
 }
 
-/** Verify a signed request, run the fixed web-safe Session preset, and return its final text. */
+/** Verify a signed request, run the selected web-safe Session preset, and return its final text. */
 async function handleTurn(
   request: IncomingMessage,
   response: ServerResponse,
@@ -125,7 +134,10 @@ async function handleTurn(
     controller.abort(timeoutReason)
   }, TURN_TIMEOUT_MS)
   try {
-    await sessionController.create({ sessionId, agentPreset: PRESET_ID })
+    await sessionController.create({
+      sessionId,
+      agentPreset: PRESET_BY_MODE[turnRequest.mode],
+    })
     if (turnRequest.model !== undefined) {
       await sessionController.selectModel({
         sessionId,
@@ -227,7 +239,7 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   const keys = Object.keys(record).sort()
   const requiredKeys = ['requestId', 'sessionId', 'text', 'version']
   if (requiredKeys.some(key => !keys.includes(key))
-    || keys.some(key => key !== 'model' && !requiredKeys.includes(key))) return undefined
+    || keys.some(key => key !== 'model' && key !== 'mode' && !requiredKeys.includes(key))) return undefined
   if (record.version !== 1 || typeof record.sessionId !== 'string'
     || !/^[A-Za-z0-9]{64}$/.test(record.sessionId)
     || typeof record.requestId !== 'string'
@@ -238,11 +250,14 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
     || Buffer.byteLength(record.text, 'utf8') > PROMPT_LIMIT_BYTES) return undefined
   const model = record.model
   if (model !== undefined && (typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model))) return undefined
+  const mode = record.mode === undefined ? 'general' : record.mode
+  if (typeof mode !== 'string' || !Object.hasOwn(PRESET_BY_MODE, mode)) return undefined
   return {
     version: 1,
     sessionId: record.sessionId,
     requestId: record.requestId,
     ...(model === undefined ? {} : { model }),
+    mode: mode as Lain42AgentMode,
     text: record.text,
   }
 }
