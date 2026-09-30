@@ -92,7 +92,7 @@ async function commandHarness(
     followup: vi.fn(),
     cancel,
     cancelActiveTurn,
-  } as unknown as Agent
+  } as Agent
   await ctx.agents.register(agent)
   ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
   ctx.provide('agentDefaultModel', {
