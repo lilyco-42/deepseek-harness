@@ -8,7 +8,7 @@ import type {
 } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
@@ -131,6 +131,15 @@ function promptRequest(content: Parameters<SessionCommandController['prompt']>[0
     mode: 'queue' as const,
     content,
   }
+}
+
+function emitTurnEnd(ctx: Context, agent: Agent): void {
+  ctx.emit('session/event', agent.session, {
+    type: 'turn/end',
+    seq: SessionSeq(1),
+    time: Date.now(),
+    data: { turn: 1, reason: { kind: 'completed' } },
+  })
 }
 
 describe('Session file uploads', () => {
@@ -377,6 +386,61 @@ describe('Session file uploads', () => {
       { accepted: true },
     ])
     expect(saveImages).toHaveBeenCalledOnce()
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a pending request id through turn end while its message is still queued', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    followup.mockImplementation((message: UserMessage) => { agent.inbox.append('next-step', message) })
+
+    await controller.prompt(request)
+    emitTurnEnd(ctx, agent)
+    agent.inbox.clear()
+
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('retires pending request ids at turn end when no queued source matches', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    await controller.prompt(request)
+    agent.inbox.append('next-turn', createUserMessage({
+      content: [],
+      source: { kind: 'model', provider: 'fixture', model: 'fixture-model' },
+    }))
+    agent.inbox.append('next-turn', createUserMessage({ content: [], source: { kind: 'user' } }))
+    agent.inbox.append('next-step', createUserMessage({
+      content: [],
+      source: { kind: 'user', rpcId: 42 as never },
+    }))
+
+    emitTurnEnd(ctx, agent)
+
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears pending request ids when the Agent has been disposed before turn end', async () => {
+    const { ctx, controller, agent, disposeAgent } = await uploadHarness()
+    await controller.prompt(promptRequest([{ type: 'text', text: 'once' }]))
+    await disposeAgent()
+
+    expect(() => { emitTurnEnd(ctx, agent) }).not.toThrow()
+  })
+
+  it('retains a pending id when delivery enqueues the prompt before rejecting', async () => {
+    const { controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    followup.mockImplementationOnce((message: UserMessage) => {
+      agent.inbox.append('next-turn', message)
+      throw new Error('rejected after enqueue')
+    })
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({ code: 'session/agent-busy' })
+    agent.inbox.clear()
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
     expect(followup).toHaveBeenCalledOnce()
   })
 
