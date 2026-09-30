@@ -331,10 +331,14 @@ export interface SessionForkValue {
 
 /** Session prompt request. */
 export interface SessionPromptRequest {
-  /** Client-minted identity persisted on the exact accepted user message. */
+  /** Client-minted identity persisted with the accepted message; changed retries using it are rejected. */
   readonly requestId: SessionRequestId
   readonly sessionId: SessionId
   readonly mode: 'queue' | 'steer'
+  /** Optional model route resolved and applied only when this request is newly admitted. */
+  readonly modelSelection?: ModelSelection
+  /** SHA-256 digest of execution context outside prompt content and model selection. */
+  readonly requestContextDigest?: string
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]
   readonly clientTimeZone?: string
@@ -399,8 +403,13 @@ export type SessionRequestId = Branded<'session-request-id'>
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    /** Browser prompt correlation and optional Host-validated time zone. */
-    'user-rpc': { kind: 'user'; rpcId: SessionRequestId; clientTimeZone?: string }
+    /** Browser prompt correlation, replay digest, and optional Host-validated time zone. */
+    'user-rpc': {
+      kind: 'user'
+      rpcId: SessionRequestId
+      requestDigest?: string
+      clientTimeZone?: string
+    }
   }
 }
 

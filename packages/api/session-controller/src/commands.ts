@@ -1,6 +1,6 @@
 /** Session commands whose activation policy is explicit at each Remote method. */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
@@ -96,7 +96,7 @@ function latestCompletedPrefixBoundary(events: readonly SessionEvent[]): Session
 
 /** Implements Session business commands delegated by the Session Controller Remote service. */
 export class SessionCommandController {
-  private readonly pendingPromptRequestIds = new WeakMap<Session, Set<SessionRequestId>>()
+  private readonly pendingPromptRequestIds = new WeakMap<Session, Map<SessionRequestId, string>>()
 
   /**
    * @param ctx - Host context carrying Agent, model, attachment, title, and Workspace services.
@@ -129,7 +129,7 @@ export class SessionCommandController {
               : []
           }),
         )
-        for (const requestId of pending) {
+        for (const requestId of pending.keys()) {
           if (agent === undefined || !queued.has(requestId)) pending.delete(requestId)
         }
       }
@@ -347,8 +347,8 @@ export class SessionCommandController {
   }
 
   /**
-   * Reject empty content, then admit one prompt after Agent and attachment validation.
-   * @param request - Session identity, prompt content, source metadata, and delivery mode.
+   * Reject empty content, then admit one request identity after model and attachment validation.
+   * @param request - Session, prompt content, optional model route, context digest, and delivery mode.
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   async prompt(request: SessionPromptRequest): Promise<SessionPromptValue> {
@@ -369,14 +369,28 @@ export class SessionCommandController {
         { value: request.clientTimeZone },
       )
     }
+    if (request.requestContextDigest !== undefined
+      && !/^[a-f0-9]{64}$/u.test(request.requestContextDigest)) {
+      throw new RemoteError(
+        'gateway/bad-request',
+        'requestContextDigest must be a lowercase SHA-256 hex digest',
+        { reason: 'INVALID_REQUEST_CONTEXT_DIGEST' },
+      )
+    }
     const agent = await this.resolveAgent(request.sessionId)
     const hasImage = request.content.some(part => part.type === 'image')
     return this.agents.serializeRequestAdmission(agent, async () => {
+      const requestedSelection = request.modelSelection ?? this.agents.selectionFor(agent).current
+      const requestDigest = promptRequestDigest(request, clientTimeZone, requestedSelection)
       const pending = this.pendingPromptRequestIds.get(agent.session)
-      if (hasPromptRequest(agent, request.requestId) || pending?.has(request.requestId)) {
-        return { accepted: true }
+      const existing = findPromptRequest(agent, request.requestId)
+      const pendingDigest = pending?.get(request.requestId)
+      if (existing !== undefined) assertPromptRequestDigest(existing, requestDigest)
+      if (pendingDigest !== undefined) {
+        assertPromptRequestDigest({ requestDigest: pendingDigest }, requestDigest)
       }
-      const selection = this.agents.selectionFor(agent).current
+      if (existing !== undefined || pendingDigest !== undefined) return { accepted: true }
+      const selection = await this.resolvePromptModelSelection(request.modelSelection) ?? requestedSelection
       if (!routeServed(this.ctx, selection.provider)) {
         throw new RemoteError(
           'session/model-unavailable',
@@ -387,17 +401,17 @@ export class SessionCommandController {
       const source: MessageSource = {
         kind: 'user',
         rpcId: request.requestId,
+        requestDigest,
         ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
       }
       let delivered = false
       try {
         if (hasImage) {
-          const current = this.agents.selectionFor(agent).current
-          const model = await this.ctx.llm.resolveModelInfo(current.provider, current.model)
+          const model = await this.ctx.llm.resolveModelInfo(selection.provider, selection.model)
           if (model.inputModalities !== undefined && !model.inputModalities.includes('image')) {
             throw new RemoteError(
               'session/attachment-invalid',
-              `Model "${current.model}" does not support image input.`,
+              `Model "${selection.model}" does not support image input.`,
               { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
             )
           }
@@ -416,15 +430,16 @@ export class SessionCommandController {
           )
         }
         using binding = this.ctx.fileUploads.bindPrompt(agent, admission.receiptIds, request.requestId)
-        const admitted = this.pendingPromptRequestIds.get(agent.session) ?? new Set<SessionRequestId>()
-        admitted.add(request.requestId)
+        if (request.modelSelection !== undefined) this.agents.selectForNextRequest(agent, selection)
+        const admitted = this.pendingPromptRequestIds.get(agent.session) ?? new Map<SessionRequestId, string>()
+        admitted.set(request.requestId, requestDigest)
         this.pendingPromptRequestIds.set(agent.session, admitted)
         if (request.mode === 'steer') agent.steer(message)
         else agent.followup(message)
         delivered = true
         binding.commit()
       } catch (error) {
-        if (!delivered && !hasPromptRequest(agent, request.requestId)) {
+        if (!delivered && findPromptRequest(agent, request.requestId) === undefined) {
           this.clearPendingPromptRequest(agent.session, request.requestId)
         }
         if (remoteErrorOf(error) !== undefined) throw error
@@ -435,6 +450,33 @@ export class SessionCommandController {
       }
       return { accepted: true }
     })
+  }
+
+  private async resolvePromptModelSelection(
+    selection: SessionPromptRequest['modelSelection'],
+  ): Promise<AgentModelSelection | undefined> {
+    if (selection === undefined) return undefined
+    try {
+      const resolved = await this.ctx.llm.resolveCallConfig({
+        provider: selection.provider,
+        model: selection.model,
+        ...(selection.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
+      })
+      return {
+        provider: resolved.provider,
+        model: resolved.model,
+        ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }),
+      }
+    } catch (error) {
+      if (remoteErrorOf(error) !== undefined) throw error
+      throw new RemoteError(
+        'session/model-unavailable',
+        error instanceof Error ? error.message : String(error),
+        { provider: selection.provider, model: selection.model },
+      )
+    }
   }
 
   private clearPendingPromptRequest(session: Session, requestId: SessionRequestId): void {
@@ -659,18 +701,77 @@ function resolvePromptFileReceipts(
   return { content: resolved, receiptIds: [...receiptIds] }
 }
 
-function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
-  const matches = (message: UserMessage): boolean => {
-    const source = message.source
-    return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+interface PromptRequestIdentity {
+  readonly requestDigest?: string
+}
+
+function assertPromptRequestDigest(existing: PromptRequestIdentity, incomingDigest: string): void {
+  if (existing.requestDigest === incomingDigest) return
+  throwPromptRequestConflict()
+}
+
+function throwPromptRequestConflict(): never {
+  throw new RemoteError(
+    'gateway/bad-request',
+    'requestId is already bound to a different or unverifiable prompt',
+    { reason: 'REQUEST_ID_CONFLICT' },
+  )
+}
+
+function findPromptRequest(agent: Agent, requestId: SessionRequestId): PromptRequestIdentity | undefined {
+  let found: PromptRequestIdentity | undefined
+  const inspect = (source: MessageSource): void => {
+    if (source.kind !== 'user' || !('rpcId' in source) || source.rpcId !== requestId) return
+    const identity = { requestDigest: 'requestDigest' in source ? source.requestDigest : undefined }
+    if (found !== undefined && found.requestDigest !== identity.requestDigest) throwPromptRequestConflict()
+    found = identity
   }
-  if (agent.inbox.nextTurn.some(matches) || agent.inbox.nextStep.some(matches)) return true
+  for (const message of [...agent.inbox.nextTurn, ...agent.inbox.nextStep]) {
+    inspect(message.source)
+  }
   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-  return agent.session.snapshotEvents().some((event) => {
-    if (event.type !== 'user/message') return false
-    const source = event.data.source
-    return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+  for (const event of agent.session.snapshotEvents()) {
+    if (event.type !== 'user/message') continue
+    inspect(event.data.source)
+  }
+  return found
+}
+
+function promptRequestDigest(
+  request: SessionPromptRequest,
+  clientTimeZone: string | undefined,
+  selection: { readonly provider: string; readonly model: string; readonly reasoningEffort?: string },
+): string {
+  const content = request.content.map((part) => {
+    switch (part.type) {
+      case 'text':
+        return { type: part.type, text: part.text }
+      case 'image':
+        return {
+          type: part.type,
+          mediaType: part.mediaType,
+          data: part.data,
+          name: part.name ?? null,
+        }
+      case 'file':
+        return { type: part.type, receiptId: String(part.receiptId) }
+      default:
+        return assertNever(part)
+    }
   })
+  const canonical = JSON.stringify({
+    sessionId: String(request.sessionId),
+    mode: request.mode,
+    content,
+    clientTimeZone: clientTimeZone ?? null,
+    modelSelection: {
+      provider: selection.provider,
+      model: selection.model,
+      reasoningEffort: selection.reasoningEffort ?? null,
+    },
+    requestContextDigest: request.requestContextDigest ?? null,
+  }) ?? ''
+  return createHash('sha256').update(canonical).digest('hex')
 }
 function imageBlockIn(
   content: unknown,

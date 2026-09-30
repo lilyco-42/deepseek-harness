@@ -91,7 +91,7 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
  * @returns A web route handler for the private turn endpoint.
  */
 export function createLain42BridgeHandler(
-  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>,
+  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>,
   secret: string,
   logWarning: (message: string) => void,
 ): WebRoute['handler'] {
@@ -106,7 +106,7 @@ export function createLain42BridgeHandler(
 async function handleTurn(
   request: IncomingMessage,
   response: ServerResponse,
-  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>,
+  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>,
   secret: string,
   nonces: Map<string, number>,
   logWarning: (message: string) => void,
@@ -154,12 +154,6 @@ async function handleTurn(
       sessionId,
       agentPreset: PRESET_BY_MODE[turnRequest.mode],
     })
-    await sessionController.selectModel({
-      sessionId,
-      provider: PRESET_ID,
-      model: turnRequest.model,
-      persistDefault: false,
-    })
     const content: SessionPromptRequest['content'] = [
       ...(turnRequest.text.trim().length === 0 ? [] : [{ type: 'text' as const, text: turnRequest.text }]),
       ...(turnRequest.images ?? []).map(image => ({
@@ -172,6 +166,8 @@ async function handleTurn(
       sessionId,
       requestId,
       mode: 'queue',
+      modelSelection: { provider: PRESET_ID, model: turnRequest.model },
+      requestContextDigest: requestContextDigest(turnRequest),
       content,
     }, controller.signal)
     promptAccepted = true
@@ -193,6 +189,10 @@ async function handleTurn(
         logWarning(`Lain42 bridge cancellation request failed (${cancelError instanceof Error ? cancelError.name : 'unknown'})`)
       }
     }
+    if (isRequestIdConflict(error)) {
+      writeJson(response, 409, { error: 'request_id_conflict' })
+      return
+    }
     const status = timedOut ? 504 : 502
     const code = timedOut ? 'agent_turn_timeout' : 'agent_turn_failed'
     logWarning(`Lain42 bridge ${code} (${error instanceof Error ? error.name : 'unknown'})`)
@@ -205,7 +205,7 @@ async function handleTurn(
 
 /** Follow durable events so retries can recover the result already committed for the same request id. */
 async function collectTurn(
-  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>,
+  sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow'>,
   sessionId: SessionId,
   requestId: SessionRequestId,
   signal: AbortSignal,
@@ -240,6 +240,17 @@ async function collectTurn(
     }
   }
   return { failure: 'not-found' }
+}
+
+/** Bind bridge-only Agent mode to the durable identity of a prompt request. */
+function requestContextDigest(request: Lain42TurnRequest): string {
+  return createHash('sha256').update(JSON.stringify({ mode: request.mode }) ?? '').digest('hex')
+}
+
+function isRequestIdConflict(error: unknown): boolean {
+  const record = asRecord(error)
+  const details = asRecord(record?.details)
+  return record?.code === 'gateway/bad-request' && details?.reason === 'REQUEST_ID_CONFLICT'
 }
 
 function eventsFromFrame(frame: SessionFollowFrame): readonly SessionEventRecord[] {

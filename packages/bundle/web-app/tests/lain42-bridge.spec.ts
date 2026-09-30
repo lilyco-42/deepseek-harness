@@ -12,7 +12,6 @@ import type {
   SessionFollowRequest,
   SessionPromptRequest,
   SessionRequestId,
-  SessionSelectModelRequest,
   SessionWireEvent,
 } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -49,23 +48,21 @@ describe('Lain42 private DSH bridge', () => {
         expect(request).toEqual({ sessionId: SESSION_ID, agentPreset: 'lain42-web-coding' })
         return { sessionId: SESSION_ID, agentPreset: 'lain42-web-coding' }
       }),
-      selectModel: vi.fn(async (request: SessionSelectModelRequest) => {
-        calls.push('selectModel')
-        return { selected: request }
-      }),
       prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
         calls.push('prompt')
         expect(request).toEqual({
           sessionId: SESSION_ID,
           requestId: REQUEST_ID,
           mode: 'queue',
+          modelSelection: { provider: 'lain42-web', model: 'openai/gpt-5.6-sol' },
+          requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
           content: [{ type: 'text', text: 'What is DeepSeek?' }],
         })
         return { accepted: true as const }
       }),
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
       cancel: vi.fn(() => ({ accepted: true as const })),
-    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>
+    } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
@@ -88,13 +85,7 @@ describe('Lain42 private DSH bridge', () => {
       answer: 'DeepSeek is an AI company and model family.',
     })
     expect(sessionController.cancel).not.toHaveBeenCalled()
-    expect(calls).toEqual(['create', 'selectModel', 'prompt'])
-    expect(sessionController.selectModel).toHaveBeenCalledWith({
-      sessionId: SESSION_ID,
-      provider: 'lain42-web',
-      model: 'openai/gpt-5.6-sol',
-      persistDefault: false,
-    })
+    expect(calls).toEqual(['create', 'prompt'])
     expect(sessionController.follow).toHaveBeenCalledWith(
       { address: { kind: 'session', sessionId: SESSION_ID }, maxMessages: 50 },
       expect.any(AbortSignal),
@@ -111,12 +102,13 @@ describe('Lain42 private DSH bridge', () => {
         sessionId: request.sessionId ?? SESSION_ID,
         agentPreset: request.agentPreset ?? 'general',
       })),
-      selectModel: vi.fn(async (request: SessionSelectModelRequest) => ({ selected: request })),
       prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
         expect(request).toEqual({
           sessionId: SESSION_ID,
           requestId: REQUEST_ID,
           mode: 'queue',
+          modelSelection: { provider: 'lain42-web', model: 'openai/gpt-5.6-sol' },
+          requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
           content: [
             { type: 'text', text: 'What is in this picture?' },
             { type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 },
@@ -126,7 +118,7 @@ describe('Lain42 private DSH bridge', () => {
       }),
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
       cancel: vi.fn(() => ({ accepted: true as const })),
-    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>
+    } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
@@ -172,6 +164,8 @@ describe('Lain42 private DSH bridge', () => {
       sessionId: SESSION_ID,
       requestId: REQUEST_ID,
       mode: 'queue',
+      modelSelection: { provider: 'lain42-web', model: 'openai/gpt-5.6-sol' },
+      requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
       content: [{ type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
     }, expect.any(AbortSignal))
   })
@@ -222,6 +216,28 @@ describe('Lain42 private DSH bridge', () => {
     }
 
     expect(sessionController.create).not.toHaveBeenCalled()
+  })
+
+  it('returns a conflict when a request id is reused for different turn content', async () => {
+    const sessionController = {
+      create: vi.fn(async (_request: SessionCreateRequest) => ({ sessionId: SESSION_ID })),
+      prompt: vi.fn(async (_request: SessionPromptRequest, _signal: AbortSignal) => {
+        throw Object.assign(new Error('request id conflict'), {
+          code: 'gateway/bad-request',
+          details: { reason: 'REQUEST_ID_CONFLICT' },
+        })
+      }),
+      follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
+      cancel: vi.fn(() => ({ accepted: true as const })),
+    } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+
+    const response = await post(baseUrl, jsonBody(validRequest()))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: 'request_id_conflict' })
+    expect(sessionController.follow).not.toHaveBeenCalled()
+    expect(sessionController.cancel).not.toHaveBeenCalled()
   })
 
   it('rejects bad signatures and signed requests with extra fields before creating a Session', async () => {
@@ -660,10 +676,9 @@ async function* answerEvents(): AsyncGenerator<SessionFollowFrame> {
 
 function inactiveSessionController(
   followFrames: (signal: AbortSignal) => AsyncGenerator<SessionFollowFrame> = () => answerEvents(),
-): Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'> {
+): Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'> {
   return {
     create: vi.fn(async (_request: SessionCreateRequest) => ({ sessionId: SESSION_ID })),
-    selectModel: vi.fn(async (request: SessionSelectModelRequest) => ({ selected: request })),
     prompt: vi.fn(async (_request: SessionPromptRequest, _signal: AbortSignal) => ({ accepted: true as const })),
     follow: vi.fn((_request: SessionFollowRequest, signal: AbortSignal) => followFrames(signal)),
     cancel: vi.fn(() => ({ accepted: true as const })),
