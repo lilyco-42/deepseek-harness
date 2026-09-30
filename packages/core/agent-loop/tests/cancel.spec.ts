@@ -63,10 +63,13 @@ describe('Agent.cancel()', () => {
     const ctx = await harness(adapter)
     try {
       const agent = await ctx.agentLoop.create(SessionId('turn-scoped-cancel'), { provider: 'mock', model: 'mock' })
+      const cancelActiveTurn = agent.cancelActiveTurn
+      if (cancelActiveTurn === undefined) throw new Error('Agent does not support turn-scoped cancellation')
+      const cancelTurn = cancelActiveTurn.bind(agent)
       const scopedResults: boolean[] = []
       ctx.on('agent/request', ({ turn }, next) => {
-        if (turn === 1) scopedResults.push(agent.cancelActiveTurn(1, { kind: 'user' }, { keepInbox: true }))
-        if (turn === 2) scopedResults.push(agent.cancelActiveTurn(1, { kind: 'user' }, { keepInbox: true }))
+        if (turn === 1) scopedResults.push(cancelTurn(1, { kind: 'user' }, { keepInbox: true }))
+        if (turn === 2) scopedResults.push(cancelTurn(1, { kind: 'user' }, { keepInbox: true }))
         return next()
       })
 
