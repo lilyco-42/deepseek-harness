@@ -84,6 +84,7 @@ async function commandHarness(
   const cancelActiveTurn = vi.fn((turn: number) => turn === 2)
   const agent = {
     id: session.id,
+    options: {},
     session,
     inbox,
     status: 'running',
@@ -92,6 +93,10 @@ async function commandHarness(
     followup: vi.fn(),
     cancel,
     cancelActiveTurn,
+    whenIdle: vi.fn(async () => {}),
+    runMaintenance: async <Value>(task: (signal: AbortSignal) => Promise<Value>) => task(new AbortController().signal),
+    send: () => {},
+    inject: () => {},
   } as Agent
   await ctx.agents.register(agent)
   ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
