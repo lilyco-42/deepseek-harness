@@ -730,9 +730,9 @@ describe('subagent ownership fence', () => {
       content: [{ type: 'text' as const, text: 'headless work' }],
     })
     await expect(remote.prompt(unzonedRequest)).resolves.toMatchObject({ ok: true })
-    expect(followup).toHaveBeenNthCalledWith(3, expect.objectContaining({
+    expect(followup.mock.calls[2]?.[0]).toMatchObject({
       source: { kind: 'user', rpcId: unzonedRequest.requestId },
-    }))
+    })
 
     for (const clientTimeZone of ['', ' UTC', 'CST', 'Not/A_Real_Zone']) {
       const invalid = await remote.prompt(promptRequest({
