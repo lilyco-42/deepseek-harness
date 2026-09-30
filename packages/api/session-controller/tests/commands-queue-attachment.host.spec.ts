@@ -107,7 +107,7 @@ async function commandHarness(
     selectionFor: () => selection,
     serializeRequestAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
-  } as unknown as ApiSessionAgentController
+  }
   return {
     ctx,
     controller: new SessionCommandController(ctx, agents, '/workspace'),

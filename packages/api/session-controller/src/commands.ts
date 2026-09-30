@@ -67,6 +67,17 @@ function hasPromptContent(content: readonly PromptContentCandidate[]): boolean {
   return content.some(part => part.type !== 'text' || part.text.trim().length > 0)
 }
 
+type CommandAgentServices = Pick<ApiSessionAgentController,
+  | 'composeAgent'
+  | 'ensureSession'
+  | 'presetForObservation'
+  | 'presetForSession'
+  | 'resolveAgent'
+  | 'selectForNextRequest'
+  | 'selectionFor'
+  | 'serializeRequestAdmission'
+>
+
 /**
  * Resolve the omitted-`atSeq` default to the latest completed-turn prefix,
  * including standalone events before the next turn begins.
@@ -94,7 +105,7 @@ export class SessionCommandController {
    */
   constructor(
     private readonly ctx: Context,
-    private readonly agents: ApiSessionAgentController,
+    private readonly agents: CommandAgentServices,
     private readonly defaultCwd: string,
   ) {
     ctx.on('session/event', (session, event) => {
@@ -103,7 +114,7 @@ export class SessionCommandController {
       if (event.type === 'user/message') {
         const source = event.data.source
         if (source.kind === 'user' && 'rpcId' in source && typeof source.rpcId === 'string') {
-          pending.delete(source.rpcId as SessionRequestId)
+          pending.delete(source.rpcId)
         }
       } else if (event.type === 'turn/end') {
         const agent = this.ctx.agents.get(session.id)
@@ -111,7 +122,7 @@ export class SessionCommandController {
           ? []
           : [...agent.inbox.nextTurn, ...agent.inbox.nextStep]
         const queued = new Set(
-          queuedMessages.flatMap(message => {
+          queuedMessages.flatMap((message) => {
             const source = message.source
             return source.kind === 'user' && 'rpcId' in source && typeof source.rpcId === 'string'
               ? [source.rpcId]

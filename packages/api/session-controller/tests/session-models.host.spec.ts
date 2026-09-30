@@ -601,7 +601,7 @@ describe('Web session model selection', () => {
     const deploymentDefault = { provider: 'deepseek-official', model: 'deepseek-chat' }
     const remote = createSessionTestRemote(ctx, {
       defaultModelSelection: () => deploymentDefault,
-      saveDefaultModelSelection: selection => {
+      saveDefaultModelSelection: (selection) => {
         saved.push(selection)
       },
       cwd: '/tmp',

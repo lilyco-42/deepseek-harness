@@ -334,12 +334,12 @@ describe('ApiSession request admission', () => {
     const { ctx, agents } = await harness()
     const first = agent(ctx, header('serialized-first'))
     const independent = agent(ctx, header('serialized-independent'))
-    const entered = Promise.withResolvers<void>()
-    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<undefined>()
+    const gate = Promise.withResolvers<undefined>()
     const order: string[] = []
 
     const firstRun = agents.serializeRequestAdmission(first, async () => {
-      entered.resolve()
+      entered.resolve(undefined)
       await gate.promise
       order.push('first')
     })
@@ -352,7 +352,7 @@ describe('ApiSession request admission', () => {
     })
     expect(order).toEqual(['independent'])
 
-    gate.resolve()
+    gate.resolve(undefined)
     await Promise.all([firstRun, secondRun])
     expect(order).toEqual(['independent', 'first', 'second'])
   })

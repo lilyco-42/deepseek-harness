@@ -14,7 +14,6 @@ import { createScope } from '@deepseek-ai/dsh-scope'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiSessionAgentController } from '../src/agent.ts'
 import { SessionCommandController } from '../src/commands.ts'
 import type { SessionRequestId } from '../src/types.ts'
 
@@ -99,7 +98,7 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
       admissionChains.set(target, result.then(() => undefined, () => undefined))
       return result
     },
-  } as unknown as ApiSessionAgentController
+  }
   const uploads = new FileUploads(ctx)
   if (uploadRoute === undefined) throw new Error('file upload route was not registered')
   return {
