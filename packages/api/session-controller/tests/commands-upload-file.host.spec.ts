@@ -85,9 +85,12 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
     listProviders: () => [{ id: 'fixture', name: 'Fixture' }],
     resolveModelInfo: () => Promise.resolve({ provider: 'fixture', id: 'fixture-model', name: 'Fixture' }),
   } as never)
-  const selection: ModelSelectionRef = {
+  const selection: ModelSelectionRef & {
+    consume: (_provider: string, _model: string, _reasoningEffort: string | undefined) => boolean
+  } = {
     current: { provider: 'fixture', model: 'fixture-model' },
     assembled: undefined,
+    consume: () => false,
   }
   const admissionChains = new WeakMap<Agent, Promise<void>>()
   const agents = {
