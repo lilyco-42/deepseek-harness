@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
@@ -132,6 +132,28 @@ async function harness(logged?: {
     ctx,
     inbox: { nextTurn: [], nextStep: [] },
   } as unknown as Agent
+  const factory: AgentFactory = {
+    async createAgent(_ownerCtx, options) {
+      const createdSession = ctx.sessions.create(
+        options.sessionId,
+        options.meta === undefined ? {} : { meta: options.meta },
+      )
+      const createdAgent = {
+        id: createdSession.id,
+        session: createdSession,
+        status: 'running',
+        ctx,
+        inbox: { nextTurn: [], nextStep: [] },
+      } as unknown as Agent
+      await options.setup?.(ctx, createdAgent)
+      const unregister = await ctx.agents.register(createdAgent)
+      return { agent: createdAgent, dispose: async () => { await unregister() } }
+    },
+    async resume() {
+      throw new Error('test harness has no persisted sessions')
+    },
+  }
+  ctx.agents.setFactory(factory)
   await ctx.agents.register(agent)
   return { ctx, agent, sessionId: session.id }
 }
