@@ -6119,11 +6119,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCancelRequest',
-    declaration: 'export interface SessionCancelRequest {\n    readonly sessionId: SessionId;\n}',
+    declaration: 'export interface SessionCancelRequest {\n    readonly sessionId: SessionId;\n    readonly turn?: number;\n}',
   },
   {
     name: 'SessionCancelValue',
-    declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n}',
+    declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n    readonly cancelled?: boolean;\n}',
   },
   {
     name: 'SessionControlBaseline',
