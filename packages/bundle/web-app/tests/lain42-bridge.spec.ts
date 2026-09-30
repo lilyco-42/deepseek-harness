@@ -147,7 +147,10 @@ describe('Lain42 private DSH bridge', () => {
   })
 
   it('admits an image-only v2 turn without adding an empty text block', async () => {
-    const sessionController = inactiveSessionController()
+    const prompt = vi.fn(async (_request: SessionPromptRequest, _signal: AbortSignal) => ({
+      accepted: true as const,
+    }))
+    const sessionController = { ...inactiveSessionController(), prompt }
     const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
     const body = jsonBody({
       version: 2,
@@ -162,7 +165,7 @@ describe('Lain42 private DSH bridge', () => {
     const response = await post(baseUrl, body)
 
     expect(response.status).toBe(200)
-    const promptCall = sessionController.prompt.mock.calls[0]
+    const promptCall = prompt.mock.calls[0]
     if (promptCall === undefined) throw new Error('expected image-only prompt call')
     const [request, signal] = promptCall
     const { requestContextDigest, ...requestWithoutContextDigest } = request
