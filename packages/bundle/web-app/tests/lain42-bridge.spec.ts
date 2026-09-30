@@ -91,6 +91,7 @@ describe('Lain42 private DSH bridge', () => {
       sessionId: SESSION_ID,
       provider: 'lain42-web',
       model: 'openai/gpt-5.6-sol',
+      persistDefault: false,
     })
     expect(sessionController.follow).toHaveBeenCalledWith(
       { address: { kind: 'session', sessionId: SESSION_ID }, maxMessages: 50 },
@@ -129,6 +130,7 @@ describe('Lain42 private DSH bridge', () => {
       version: 2,
       sessionId: SESSION_ID,
       requestId: REQUEST_ID,
+      model: 'openai/gpt-5.6-sol',
       mode: 'general',
       text: 'What is in this picture?',
       images: [{ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
@@ -154,6 +156,7 @@ describe('Lain42 private DSH bridge', () => {
       version: 2,
       sessionId: SESSION_ID,
       requestId: REQUEST_ID,
+      model: 'openai/gpt-5.6-sol',
       mode: 'general',
       text: '',
       images: [{ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
@@ -199,6 +202,7 @@ describe('Lain42 private DSH bridge', () => {
         version: extra.version,
         sessionId: SESSION_ID,
         requestId: REQUEST_ID,
+        model: 'openai/gpt-5.6-sol',
         text: 'Look at this image',
         images: extra.images,
       }))
@@ -430,12 +434,15 @@ describe('Lain42 private DSH bridge', () => {
     const sessionController = inactiveSessionController()
     const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
     const valid = validRequest()
+    const missingModel = { ...valid }
+    delete missingModel.model
     const cases: Buffer[] = [
       Buffer.from('{'),
       Buffer.from('null'),
       Buffer.from('[]'),
       Buffer.from('7'),
       jsonBody({ ...valid, extra: true }),
+      jsonBody(missingModel),
       jsonBody({ version: 1, sessionId: SESSION_ID, requestId: REQUEST_ID, prompt: 'hello' }),
       jsonBody({ ...valid, version: 2 }),
       jsonBody({ ...valid, sessionId: 7 }),
@@ -627,7 +634,13 @@ function inactiveSessionController(
 }
 
 function validRequest(): Record<string, unknown> {
-  return { version: 1, sessionId: SESSION_ID, requestId: REQUEST_ID, text: 'hello' }
+  return {
+    version: 1,
+    sessionId: SESSION_ID,
+    requestId: REQUEST_ID,
+    model: 'openai/gpt-5.6-sol',
+    text: 'hello',
+  }
 }
 
 function jsonBody(value: object): Buffer {

@@ -296,6 +296,8 @@ export interface SessionCreateValue {
 /** Session model-selection request. */
 export interface SessionSelectModelRequest extends ModelSelection {
   readonly sessionId: SessionId
+  /** Save this selection as the deployment default for Sessions without a logged choice. Defaults to true. */
+  readonly persistDefault?: boolean
 }
 
 /** Accepted model selection after Host resolution. */

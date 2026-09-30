@@ -1827,8 +1827,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'selectModel\') selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue>',
-        description: 'Select one Session-local model after explicitly resuming the Session.',
-        parameters: [{ name: 'request', description: 'Session identity and requested model selection.' }],
+        description: 'Select one Session-local model and optionally save it as the deployment default.',
+        parameters: [{ name: 'request', description: 'Session identity, requested model, and default-persistence choice.' }],
         returns: 'the normalized selection installed for the Session.',
       },
       {
@@ -6471,7 +6471,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionSelectModelRequest',
-    declaration: 'export interface SessionSelectModelRequest extends ModelSelection {\n    readonly sessionId: SessionId;\n}',
+    declaration: 'export interface SessionSelectModelRequest extends ModelSelection {\n    readonly sessionId: SessionId;\n    readonly persistDefault?: boolean;\n}',
   },
   {
     name: 'SessionSelectModelValue',

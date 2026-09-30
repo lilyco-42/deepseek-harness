@@ -47,7 +47,7 @@ interface Lain42TurnRequest {
   readonly version: 1 | 2
   readonly sessionId: string
   readonly requestId: string
-  readonly model?: string
+  readonly model: string
   readonly mode: Lain42AgentMode
   readonly text: string
   readonly images?: readonly Lain42TurnImage[]
@@ -153,13 +153,12 @@ async function handleTurn(
       sessionId,
       agentPreset: PRESET_BY_MODE[turnRequest.mode],
     })
-    if (turnRequest.model !== undefined) {
-      await sessionController.selectModel({
-        sessionId,
-        provider: PRESET_ID,
-        model: turnRequest.model,
-      })
-    }
+    await sessionController.selectModel({
+      sessionId,
+      provider: PRESET_ID,
+      model: turnRequest.model,
+      persistDefault: false,
+    })
     const content: SessionPromptRequest['content'] = [
       ...(turnRequest.text.trim().length === 0 ? [] : [{ type: 'text' as const, text: turnRequest.text }]),
       ...(turnRequest.images ?? []).map(image => ({
@@ -260,7 +259,7 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   const record = asRecord(value)
   if (record === undefined) return undefined
   const keys = Object.keys(record).sort()
-  const requiredKeys = ['requestId', 'sessionId', 'text', 'version']
+  const requiredKeys = ['model', 'requestId', 'sessionId', 'text', 'version']
   if (requiredKeys.some(key => !keys.includes(key))
     || keys.some(key => key !== 'model' && key !== 'mode' && key !== 'images' && !requiredKeys.includes(key))) return undefined
   if ((record.version !== 1 && record.version !== 2) || typeof record.sessionId !== 'string'
@@ -277,14 +276,14 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   if (record.version === 2 && (images === undefined || images.length === 0)) return undefined
   if (record.text.trim().length === 0 && (images?.length ?? 0) === 0) return undefined
   const model = record.model
-  if (model !== undefined && (typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model))) return undefined
+  if (typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model)) return undefined
   const mode = record.mode === undefined ? 'general' : record.mode
   if (typeof mode !== 'string' || !Object.hasOwn(PRESET_BY_MODE, mode)) return undefined
   return {
     version: record.version,
     sessionId: record.sessionId,
     requestId: record.requestId,
-    ...(model === undefined ? {} : { model }),
+    model,
     mode: mode as Lain42AgentMode,
     text: record.text,
     ...(images === undefined ? {} : { images }),
