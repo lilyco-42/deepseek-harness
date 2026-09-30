@@ -420,7 +420,7 @@ describe('Session file uploads', () => {
     await expect(first).resolves.toEqual({ accepted: true })
     await expect(changed).rejects.toMatchObject({
       code: 'gateway/bad-request',
-      details: { reason: 'REQUEST_ID_CONFLICT' },
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     expect(saveImages).toHaveBeenCalledOnce()
     expect(followup).toHaveBeenCalledOnce()
@@ -440,21 +440,21 @@ describe('Session file uploads', () => {
       content: [{ type: 'text', text: 'different prompt' }],
     })).rejects.toMatchObject({
       code: 'gateway/bad-request',
-      details: { reason: 'REQUEST_ID_CONFLICT' },
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     await expect(controller.prompt({
       ...request,
       modelSelection: { provider: 'fixture', model: 'different-model' },
     })).rejects.toMatchObject({
       code: 'gateway/bad-request',
-      details: { reason: 'REQUEST_ID_CONFLICT' },
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     await expect(controller.prompt({
       ...request,
       requestContextDigest: 'b'.repeat(64),
     })).rejects.toMatchObject({
       code: 'gateway/bad-request',
-      details: { reason: 'REQUEST_ID_CONFLICT' },
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     expect(followup).toHaveBeenCalledOnce()
     expect(selectForNextRequest).toHaveBeenCalledOnce()
@@ -472,7 +472,7 @@ describe('Session file uploads', () => {
 
     await expect(controller.prompt(request)).rejects.toMatchObject({
       code: 'gateway/bad-request',
-      details: { reason: 'REQUEST_ID_CONFLICT' },
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     expect(followup).not.toHaveBeenCalled()
   })
@@ -573,7 +573,7 @@ describe('Session file uploads', () => {
 
     await expect(controller.prompt(request)).rejects.toMatchObject({
       code: 'gateway/bad-request',
-      details: { reason: 'REQUEST_ID_CONFLICT' },
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     expect(followup).not.toHaveBeenCalled()
   })

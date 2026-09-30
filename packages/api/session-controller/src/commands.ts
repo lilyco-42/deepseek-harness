@@ -374,13 +374,14 @@ export class SessionCommandController {
       throw new RemoteError(
         'gateway/bad-request',
         'requestContextDigest must be a lowercase SHA-256 hex digest',
-        { reason: 'INVALID_REQUEST_CONTEXT_DIGEST' },
+        { issues: [{ reason: 'INVALID_REQUEST_CONTEXT_DIGEST' }] },
       )
     }
     const agent = await this.resolveAgent(request.sessionId)
     const hasImage = request.content.some(part => part.type === 'image')
     return this.agents.serializeRequestAdmission(agent, async () => {
-      const requestedSelection = request.modelSelection ?? this.agents.selectionFor(agent).current
+      const currentSelection = this.agents.selectionFor(agent).current
+      const requestedSelection = request.modelSelection ?? currentSelection
       const requestDigest = promptRequestDigest(request, clientTimeZone, requestedSelection)
       const pending = this.pendingPromptRequestIds.get(agent.session)
       const existing = findPromptRequest(agent, request.requestId)
@@ -390,7 +391,9 @@ export class SessionCommandController {
         assertPromptRequestDigest({ requestDigest: pendingDigest }, requestDigest)
       }
       if (existing !== undefined || pendingDigest !== undefined) return { accepted: true }
-      const selection = await this.resolvePromptModelSelection(request.modelSelection) ?? requestedSelection
+      const selection = request.modelSelection === undefined
+        ? currentSelection
+        : await this.resolvePromptModelSelection(request.modelSelection)
       if (!routeServed(this.ctx, selection.provider)) {
         throw new RemoteError(
           'session/model-unavailable',
@@ -453,9 +456,8 @@ export class SessionCommandController {
   }
 
   private async resolvePromptModelSelection(
-    selection: SessionPromptRequest['modelSelection'],
-  ): Promise<AgentModelSelection | undefined> {
-    if (selection === undefined) return undefined
+    selection: NonNullable<SessionPromptRequest['modelSelection']>,
+  ): Promise<AgentModelSelection> {
     try {
       const resolved = await this.ctx.llm.resolveCallConfig({
         provider: selection.provider,
@@ -714,7 +716,7 @@ function throwPromptRequestConflict(): never {
   throw new RemoteError(
     'gateway/bad-request',
     'requestId is already bound to a different or unverifiable prompt',
-    { reason: 'REQUEST_ID_CONFLICT' },
+    { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
   )
 }
 
@@ -722,7 +724,8 @@ function findPromptRequest(agent: Agent, requestId: SessionRequestId): PromptReq
   let found: PromptRequestIdentity | undefined
   const inspect = (source: MessageSource): void => {
     if (source.kind !== 'user' || !('rpcId' in source) || source.rpcId !== requestId) return
-    const identity = { requestDigest: 'requestDigest' in source ? source.requestDigest : undefined }
+    const requestDigest = 'requestDigest' in source ? source.requestDigest : undefined
+    const identity: PromptRequestIdentity = requestDigest === undefined ? {} : { requestDigest }
     if (found !== undefined && found.requestDigest !== identity.requestDigest) throwPromptRequestConflict()
     found = identity
   }

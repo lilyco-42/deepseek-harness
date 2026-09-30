@@ -224,7 +224,7 @@ describe('Lain42 private DSH bridge', () => {
       prompt: vi.fn(async (_request: SessionPromptRequest, _signal: AbortSignal) => {
         throw Object.assign(new Error('request id conflict'), {
           code: 'gateway/bad-request',
-          details: { reason: 'REQUEST_ID_CONFLICT' },
+          details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
         })
       }),
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),

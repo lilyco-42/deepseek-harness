@@ -250,7 +250,10 @@ function requestContextDigest(request: Lain42TurnRequest): string {
 function isRequestIdConflict(error: unknown): boolean {
   const record = asRecord(error)
   const details = asRecord(record?.details)
-  return record?.code === 'gateway/bad-request' && details?.reason === 'REQUEST_ID_CONFLICT'
+  const issues = details?.issues
+  return record?.code === 'gateway/bad-request'
+    && Array.isArray(issues)
+    && issues.some(issue => asRecord(issue)?.reason === 'REQUEST_ID_CONFLICT')
 }
 
 function eventsFromFrame(frame: SessionFollowFrame): readonly SessionEventRecord[] {
