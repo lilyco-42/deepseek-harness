@@ -189,7 +189,7 @@ declare module './types.ts' {
      * @param options - cancellation options; `keepInbox` preserves pending work.
      * @returns whether that exact turn was active and cancellation was requested.
      */
-    cancelActiveTurn(turn: number, cause: AgentCancelCause, options?: CancelOptions): boolean
+    cancelActiveTurn?(turn: number, cause: AgentCancelCause, options?: CancelOptions): boolean
 
     /**
    * Resolve after the current whole-agent activity reaches quiescence. This

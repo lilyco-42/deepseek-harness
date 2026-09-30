@@ -634,7 +634,7 @@ export class SessionCommandController {
       }
       return {
         accepted: true,
-        cancelled: agent.cancelActiveTurn(request.turn, { kind: 'user' }, { keepInbox: true }),
+        cancelled: agent.cancelActiveTurn?.(request.turn, { kind: 'user' }, { keepInbox: true }) ?? false,
       }
     }
     agent.cancel({ kind: 'user' }, { keepInbox: true })
