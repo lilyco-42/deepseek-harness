@@ -25,6 +25,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+并发 Prompt 重试会共用同一请求标识；从准入处理中到用户消息写入日志前都只接受一次。
+
 会话模型选择操作会为指定 Session 记录经验证的模型选择；默认还会将它保存为没有已记录模型选择的 Session 所使用的部署默认值。模型由 DSH 之外的账号范围决定时，调用方应将 persistDefault 设为 false，避免改动指定 Session 之外的默认模型。
 
 历史页与 follow opening 快照为每个持久 Session 事件携带一条 `{ type: 'event', event: SessionWireEvent }` record。Client 把每条已接受 record 保留为一个持久 `SessionEventLikeEntry`；Assistant token 边界保留在 `assistant/message` 或 `assistant/attempt` 的紧凑流内。工具参数、结果内容、失败信息和 `tool/result.data.meta` 原样通过；控制器不解析工具定义、不运行展示转换器，也不附加 UI 数据。

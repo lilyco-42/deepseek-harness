@@ -90,10 +90,15 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
     current: { provider: 'fixture', model: 'fixture-model' },
     assembled: undefined,
   }
+  const admissionChains = new WeakMap<Agent, Promise<void>>()
   const agents = {
     resolveAgent: () => Promise.resolve({ agent }),
     selectionFor: () => selection,
-    serializeImageAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
+    serializeRequestAdmission: <Value>(target: Agent, operation: () => Promise<Value>) => {
+      const result = (admissionChains.get(target) ?? Promise.resolve()).then(operation)
+      admissionChains.set(target, result.then(() => undefined, () => undefined))
+      return result
+    },
   } as unknown as ApiSessionAgentController
   const uploads = new FileUploads(ctx)
   if (uploadRoute === undefined) throw new Error('file upload route was not registered')
@@ -339,6 +344,51 @@ describe('Session file uploads', () => {
     agent.inbox.append('next-turn', followup.mock.calls[0]?.[0] as UserMessage)
     await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
     expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('deduplicates concurrent retries while an accepted image prompt is not durable yet', async () => {
+    const { controller, saveImages, followup } = await uploadHarness()
+    const admitted = Promise.withResolvers<readonly ImageAttachmentRef[]>()
+    saveImages.mockReturnValueOnce(admitted.promise)
+    const image: ImageAttachmentRef = {
+      attachmentId: AttachmentId('concurrent-image'),
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 1,
+    }
+    const request = promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }])
+
+    const first = controller.prompt(request)
+    await vi.waitFor(() => { expect(saveImages).toHaveBeenCalledOnce() })
+    const retry = controller.prompt(request)
+    admitted.resolve([image])
+
+    await expect(Promise.all([first, retry])).resolves.toEqual([
+      { accepted: true },
+      { accepted: true },
+    ])
+    expect(saveImages).toHaveBeenCalledOnce()
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('releases a request id when Agent admission rejects before delivery', async () => {
+    const { controller, saveImages, followup } = await uploadHarness()
+    const image: ImageAttachmentRef = {
+      attachmentId: AttachmentId('retry-image'),
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 1,
+    }
+    saveImages.mockResolvedValue([image])
+    followup.mockImplementationOnce(() => { throw new Error('busy') })
+    const request = promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }])
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({ code: 'session/agent-busy' })
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(saveImages).toHaveBeenCalledTimes(2)
+    expect(followup).toHaveBeenCalledTimes(2)
   })
 
   it('deduplicates a retried rpcId already present in the durable log', async () => {

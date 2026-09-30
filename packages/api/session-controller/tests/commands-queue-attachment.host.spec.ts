@@ -105,7 +105,7 @@ async function commandHarness(
       ? { agent }
       : { error: new RemoteError('session/not-found', 'missing', { sessionId: id }) }),
     selectionFor: () => selection,
-    serializeImageAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
+    serializeRequestAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
   } as unknown as ApiSessionAgentController
   return {

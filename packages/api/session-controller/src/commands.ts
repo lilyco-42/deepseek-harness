@@ -16,7 +16,7 @@ import {
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -85,6 +85,8 @@ function latestCompletedPrefixBoundary(events: readonly SessionEvent[]): Session
 
 /** Implements Session business commands delegated by the Session Controller Remote service. */
 export class SessionCommandController {
+  private readonly pendingPromptRequestIds = new WeakMap<Session, Set<SessionRequestId>>()
+
   /**
    * @param ctx - Host context carrying Agent, model, attachment, title, and Workspace services.
    * @param agents - sole owner of create, resume, and Session-local model selection.
@@ -94,7 +96,35 @@ export class SessionCommandController {
     private readonly ctx: Context,
     private readonly agents: ApiSessionAgentController,
     private readonly defaultCwd: string,
-  ) {}
+  ) {
+    ctx.on('session/event', (session, event) => {
+      const pending = this.pendingPromptRequestIds.get(session)
+      if (pending === undefined) return
+      if (event.type === 'user/message') {
+        const source = event.data.source
+        if (source.kind === 'user' && 'rpcId' in source && typeof source.rpcId === 'string') {
+          pending.delete(source.rpcId as SessionRequestId)
+        }
+      } else if (event.type === 'turn/end') {
+        const agent = this.ctx.agents.get(session.id)
+        const queuedMessages = agent === undefined
+          ? []
+          : [...agent.inbox.nextTurn, ...agent.inbox.nextStep]
+        const queued = new Set(
+          queuedMessages.flatMap(message => {
+            const source = message.source
+            return source.kind === 'user' && 'rpcId' in source && typeof source.rpcId === 'string'
+              ? [source.rpcId]
+              : []
+          }),
+        )
+        for (const requestId of pending) {
+          if (agent === undefined || !queued.has(requestId)) pending.delete(requestId)
+        }
+      }
+      if (pending.size === 0) this.pendingPromptRequestIds.delete(session)
+    })
+  }
 
   /**
    * Create or idempotently adopt one ordinary Session.
@@ -149,7 +179,7 @@ export class SessionCommandController {
    */
   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
     const agent = await this.resolveAgent(request.sessionId)
-    return this.agents.serializeImageAdmission(agent, async () => {
+    return this.agents.serializeRequestAdmission(agent, async () => {
       try {
         const resolved = await this.ctx.llm.resolveCallConfig({
           provider: request.provider,
@@ -329,22 +359,26 @@ export class SessionCommandController {
       )
     }
     const agent = await this.resolveAgent(request.sessionId)
-    if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
-    const selection = this.agents.selectionFor(agent).current
-    if (!routeServed(this.ctx, selection.provider)) {
-      throw new RemoteError(
-        'session/model-unavailable',
-        `no adapter serves provider "${selection.provider}"; select a model for this session`,
-        { provider: selection.provider, model: selection.model },
-      )
-    }
-    const source: MessageSource = {
-      kind: 'user',
-      rpcId: request.requestId,
-      ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
-    }
     const hasImage = request.content.some(part => part.type === 'image')
-    const admit = async (): Promise<SessionPromptValue> => {
+    return this.agents.serializeRequestAdmission(agent, async () => {
+      const pending = this.pendingPromptRequestIds.get(agent.session)
+      if (hasPromptRequest(agent, request.requestId) || pending?.has(request.requestId)) {
+        return { accepted: true }
+      }
+      const selection = this.agents.selectionFor(agent).current
+      if (!routeServed(this.ctx, selection.provider)) {
+        throw new RemoteError(
+          'session/model-unavailable',
+          `no adapter serves provider "${selection.provider}"; select a model for this session`,
+          { provider: selection.provider, model: selection.model },
+        )
+      }
+      const source: MessageSource = {
+        kind: 'user',
+        rpcId: request.requestId,
+        ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
+      }
+      let delivered = false
       try {
         if (hasImage) {
           const current = this.agents.selectionFor(agent).current
@@ -371,10 +405,17 @@ export class SessionCommandController {
           )
         }
         using binding = this.ctx.fileUploads.bindPrompt(agent, admission.receiptIds, request.requestId)
+        const admitted = this.pendingPromptRequestIds.get(agent.session) ?? new Set<SessionRequestId>()
+        admitted.add(request.requestId)
+        this.pendingPromptRequestIds.set(agent.session, admitted)
         if (request.mode === 'steer') agent.steer(message)
         else agent.followup(message)
+        delivered = true
         binding.commit()
       } catch (error) {
+        if (!delivered && !hasPromptRequest(agent, request.requestId)) {
+          this.clearPendingPromptRequest(agent.session, request.requestId)
+        }
         if (remoteErrorOf(error) !== undefined) throw error
         if (error instanceof AttachmentError) {
           throw new RemoteError('session/attachment-invalid', error.message, { reason: error.code })
@@ -382,8 +423,13 @@ export class SessionCommandController {
         throw new RemoteError('session/agent-busy', 'prompt rejected', { reason: String(error) })
       }
       return { accepted: true }
-    }
-    return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit()
+    })
+  }
+
+  private clearPendingPromptRequest(session: Session, requestId: SessionRequestId): void {
+    const pending = this.pendingPromptRequestIds.get(session)
+    pending?.delete(requestId)
+    if (pending?.size === 0) this.pendingPromptRequestIds.delete(session)
   }
 
   /**

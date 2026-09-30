@@ -25,6 +25,8 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
+Concurrent Prompt retries share one request identity while admission is in progress and until the user message is logged.
+
 The session model-selection operation records a validated choice for the addressed Session and, by default, saves it as the deployment default for Sessions without a logged choice. Integrations whose model is scoped outside DSH set persistDefault to false to keep that choice local to the addressed Session.
 
 History pages and follow opening snapshots carry one `{ type: 'event', event: SessionWireEvent }` record per durable Session event. The Client retains each accepted record as one durable `SessionEventLikeEntry`; Assistant token boundaries remain inside the compact stream on `assistant/message` or `assistant/attempt`. Tool arguments, result content, failures, and `tool/result.data.meta` pass through unchanged; the controller does not resolve a Tool definition, run a presenter, or attach UI data.
