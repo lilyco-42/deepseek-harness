@@ -434,7 +434,7 @@ describe('Session file uploads', () => {
       requestContextDigest: 'a'.repeat(64),
     }
     await controller.prompt(request)
-    expect(followup.mock.calls[0]?.[0]?.source).toHaveProperty('requestDigest')
+    expect((followup.mock.calls[0]?.[0] as UserMessage).source).toHaveProperty('requestDigest')
 
     await expect(controller.prompt({
       ...request,
