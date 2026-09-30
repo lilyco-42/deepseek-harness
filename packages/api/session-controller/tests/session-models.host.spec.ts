@@ -138,13 +138,11 @@ async function harness(logged?: {
         options.sessionId,
         options.meta === undefined ? {} : { meta: options.meta },
       )
-      const createdAgent = {
+      const createdAgent: Agent = {
+        ...agent,
         id: createdSession.id,
         session: createdSession,
-        status: 'running',
-        ctx,
-        inbox: { nextTurn: [], nextStep: [] },
-      } as unknown as Agent
+      }
       await options.setup?.(ctx, createdAgent)
       const unregister = await ctx.agents.register(createdAgent)
       return { agent: createdAgent, dispose: async () => { await unregister() } }
