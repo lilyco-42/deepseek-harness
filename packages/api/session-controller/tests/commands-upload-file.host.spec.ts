@@ -92,6 +92,11 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
   const admissionChains = new WeakMap<Agent, Promise<void>>()
   const agents = {
     resolveAgent: () => Promise.resolve({ agent }),
+    ensureSession: () => { throw new Error('Unexpected ensureSession call in upload test') },
+    presetForObservation: () => { throw new Error('Unexpected presetForObservation call in upload test') },
+    presetForSession: () => { throw new Error('Unexpected presetForSession call in upload test') },
+    selectForNextRequest: () => { throw new Error('Unexpected selectForNextRequest call in upload test') },
+    composeAgent: () => { throw new Error('Unexpected composeAgent call in upload test') },
     selectionFor: () => selection,
     serializeRequestAdmission: <Value>(target: Agent, operation: () => Promise<Value>) => {
       const result = (admissionChains.get(target) ?? Promise.resolve()).then(operation)

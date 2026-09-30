@@ -104,6 +104,10 @@ async function commandHarness(
     resolveAgent: (id: SessionId) => Promise.resolve(id === agent.id
       ? { agent }
       : { error: new RemoteError('session/not-found', 'missing', { sessionId: id }) }),
+    ensureSession: () => { throw new Error('Unexpected ensureSession call in queue attachment test') },
+    presetForObservation: () => { throw new Error('Unexpected presetForObservation call in queue attachment test') },
+    presetForSession: () => { throw new Error('Unexpected presetForSession call in queue attachment test') },
+    selectForNextRequest: () => { throw new Error('Unexpected selectForNextRequest call in queue attachment test') },
     selectionFor: () => selection,
     serializeRequestAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
