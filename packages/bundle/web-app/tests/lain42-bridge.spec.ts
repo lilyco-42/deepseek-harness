@@ -50,12 +50,13 @@ describe('Lain42 private DSH bridge', () => {
       }),
       prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
         calls.push('prompt')
-        expect(request).toEqual({
+        const { requestContextDigest, ...requestWithoutContextDigest } = request
+        expect(requestContextDigest).toMatch(/^[a-f0-9]{64}$/u)
+        expect(requestWithoutContextDigest).toEqual({
           sessionId: SESSION_ID,
           requestId: REQUEST_ID,
           mode: 'queue',
           modelSelection: { provider: 'lain42-web', model: 'openai/gpt-5.6-sol' },
-          requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
           content: [{ type: 'text', text: 'What is DeepSeek?' }],
         })
         return { accepted: true as const }
@@ -103,12 +104,13 @@ describe('Lain42 private DSH bridge', () => {
         agentPreset: request.agentPreset ?? 'general',
       })),
       prompt: vi.fn(async (request: SessionPromptRequest, _signal: AbortSignal) => {
-        expect(request).toEqual({
+        const { requestContextDigest, ...requestWithoutContextDigest } = request
+        expect(requestContextDigest).toMatch(/^[a-f0-9]{64}$/u)
+        expect(requestWithoutContextDigest).toEqual({
           sessionId: SESSION_ID,
           requestId: REQUEST_ID,
           mode: 'queue',
           modelSelection: { provider: 'lain42-web', model: 'openai/gpt-5.6-sol' },
-          requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
           content: [
             { type: 'text', text: 'What is in this picture?' },
             { type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 },
@@ -160,14 +162,19 @@ describe('Lain42 private DSH bridge', () => {
     const response = await post(baseUrl, body)
 
     expect(response.status).toBe(200)
-    expect(sessionController.prompt).toHaveBeenCalledWith({
+    const promptCall = sessionController.prompt.mock.calls[0]
+    if (promptCall === undefined) throw new Error('expected image-only prompt call')
+    const [request, signal] = promptCall
+    const { requestContextDigest, ...requestWithoutContextDigest } = request
+    expect(requestContextDigest).toMatch(/^[a-f0-9]{64}$/u)
+    expect(requestWithoutContextDigest).toEqual({
       sessionId: SESSION_ID,
       requestId: REQUEST_ID,
       mode: 'queue',
       modelSelection: { provider: 'lain42-web', model: 'openai/gpt-5.6-sol' },
-      requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
       content: [{ type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }],
-    }, expect.any(AbortSignal))
+    })
+    expect(signal).toBeInstanceOf(AbortSignal)
   })
 
   it('rejects malformed or legacy-version image payloads before creating a Session', async () => {

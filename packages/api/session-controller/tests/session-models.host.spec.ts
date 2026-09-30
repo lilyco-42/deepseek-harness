@@ -786,6 +786,51 @@ describe('Web session model selection', () => {
       ok: false,
       error: { code: 'session/model-unavailable', message: 'string selection failure' },
     })
+
+    const promptContent = [{ type: 'text' as const, text: 'route this prompt' }]
+    expectValue(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'image-capable', model: 'vision' },
+    })))
+    expectValue(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: {
+        provider: 'deepseek-official',
+        model: 'deepseek-chat',
+        reasoningEffort: ReasoningEffortId('high'),
+      },
+    })))
+    expect(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'metadata-broken', model: 'broken' },
+    }))).toMatchObject({
+      ok: false,
+      error: { code: 'session/model-unavailable', message: 'reasoning metadata offline' },
+    })
+    expect(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'string-error', model: 'broken' },
+    }))).toMatchObject({
+      ok: false,
+      error: { code: 'session/model-unavailable', message: 'string selection failure' },
+    })
+    expect(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'remote-rejected', model: 'rejected' },
+    }))).toMatchObject({
+      ok: false,
+      error: { code: 'gateway/internal', message: 'fixture rejected the selection' },
+    })
     await ctx.fiber.dispose()
   })
 })

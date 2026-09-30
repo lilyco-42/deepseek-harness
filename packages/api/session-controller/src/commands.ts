@@ -758,6 +758,7 @@ function promptRequestDigest(
         }
       case 'file':
         return { type: part.type, receiptId: String(part.receiptId) }
+      /* v8 ignore next -- closed-union exhaustiveness guard; RPC schema validates prompt content kinds. */
       default:
         return assertNever(part)
     }
@@ -773,7 +774,7 @@ function promptRequestDigest(
       reasoningEffort: selection.reasoningEffort ?? null,
     },
     requestContextDigest: request.requestContextDigest ?? null,
-  }) ?? ''
+  })
   return createHash('sha256').update(canonical).digest('hex')
 }
 function imageBlockIn(

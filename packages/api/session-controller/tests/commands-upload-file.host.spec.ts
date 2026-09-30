@@ -460,6 +460,25 @@ describe('Session file uploads', () => {
     expect(selectForNextRequest).toHaveBeenCalledOnce()
   })
 
+  it('rejects malformed context digests and unserved prompt model selections before delivery', async () => {
+    const { controller, followup, selectForNextRequest } = await uploadHarness()
+    const base = promptRequest([{ type: 'text', text: 'valid prompt' }])
+
+    await expect(controller.prompt({ ...base, requestContextDigest: 'not-a-digest' })).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'INVALID_REQUEST_CONTEXT_DIGEST' }] },
+    })
+    await expect(controller.prompt({
+      ...base,
+      modelSelection: { provider: 'not-served', model: 'missing-model' },
+    })).rejects.toMatchObject({
+      code: 'session/model-unavailable',
+      details: { provider: 'not-served', model: 'missing-model' },
+    })
+    expect(followup).not.toHaveBeenCalled()
+    expect(selectForNextRequest).not.toHaveBeenCalled()
+  })
+
   it('rejects a durable request id already bound to conflicting messages', async () => {
     const { controller, agent, followup } = await uploadHarness()
     const request = promptRequest([{ type: 'text', text: 'same prompt' }])

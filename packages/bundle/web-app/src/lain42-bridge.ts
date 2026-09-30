@@ -244,7 +244,7 @@ async function collectTurn(
 
 /** Bind bridge-only Agent mode to the durable identity of a prompt request. */
 function requestContextDigest(request: Lain42TurnRequest): string {
-  return createHash('sha256').update(JSON.stringify({ mode: request.mode }) ?? '').digest('hex')
+  return createHash('sha256').update(JSON.stringify({ mode: request.mode })).digest('hex')
 }
 
 function isRequestIdConflict(error: unknown): boolean {
