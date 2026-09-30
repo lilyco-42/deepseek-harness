@@ -82,6 +82,15 @@ interface Agent {
   cancel(cause: AgentCancelCause, options?: CancelOptions): void
 
   /**
+   * Cancel only when the expected durable turn is still the active turn.
+   * @param turn - turn number observed for the request being cancelled.
+   * @param cause - stable caller intent carried by the active operation signal.
+   * @param options - cancellation options; `keepInbox` preserves pending work.
+   * @returns whether that exact turn was active and cancellation was requested.
+   */
+  cancelActiveTurn?(turn: number, cause: AgentCancelCause, options?: CancelOptions): boolean
+
+  /**
    * Resolve after the current whole-agent activity reaches quiescence. This
    * follows replacement work started before the observed driver retires,
    * but does not identify the settlement of any particular message.
