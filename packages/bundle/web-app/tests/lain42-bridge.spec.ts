@@ -559,7 +559,9 @@ describe('Lain42 private DSH bridge', () => {
     let fireTurnTimeout: (() => void) | undefined
     vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
       if (delay === 120_000 && typeof callback === 'function') {
-        fireTurnTimeout = () => callback(...args)
+        fireTurnTimeout = () => {
+          callback(...args)
+        }
         return realSetTimeout(() => {}, 2_147_483_647)
       }
       return realSetTimeout(callback, delay, ...args)
@@ -578,6 +580,31 @@ describe('Lain42 private DSH bridge', () => {
     expect(await timedOut.json()).toEqual({ error: 'agent_turn_timeout' })
     expect(timeoutWarning).toHaveBeenCalledWith('Lain42 bridge agent_turn_timeout (Error)')
     expect(timeoutController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID })
+
+    for (const [cancelError, errorName] of [
+      [new Error('private cancellation detail'), 'Error'],
+      ['private cancellation detail', 'unknown'],
+    ] as const) {
+      const cancellationWarning = vi.fn()
+      const cancellationFailureController = inactiveSessionController(async function* (signal) {
+        fireTurnTimeout?.()
+        if (signal.aborted) throw signal.reason
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => { reject(new Error('request aborted')) }, { once: true })
+        })
+      })
+      cancellationFailureController.cancel = vi.fn(() => { throw cancelError })
+      const cancellationFailureUrl = await listen(
+        createLain42BridgeHandler(cancellationFailureController, SECRET, cancellationWarning),
+      )
+      const cancellationFailure = await post(cancellationFailureUrl, jsonBody(validRequest()))
+      expect(cancellationFailure.status).toBe(504)
+      expect(await cancellationFailure.json()).toEqual({ error: 'agent_turn_timeout' })
+      expect(cancellationFailureController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID })
+      expect(cancellationWarning).toHaveBeenCalledWith(
+        `Lain42 bridge cancellation request failed (${errorName})`,
+      )
+    }
   })
 
   it('logs registration failures without exposing their private error text', async () => {
