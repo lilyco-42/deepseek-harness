@@ -214,16 +214,22 @@ function scrubValue(
   cwdPathMode: CwdPathMode,
   identityMode: 'legacy' | 'preserve',
   key?: string,
+  omitRequestDigests = false,
 ): unknown {
   if (typeof value === 'string') {
     if (identityMode === 'legacy' && key === 'messageId') return MESSAGE_ID
     const scrubbed = scrubString(value, ctx, cwdPathMode, identityMode)
     return cwdPathMode === 'canonical' && key === 'path' ? scrubbed.replaceAll('\\', '/') : scrubbed
   }
-  if (Array.isArray(value)) return value.map(v => scrubValue(v, ctx, cwdPathMode, identityMode))
+  if (Array.isArray(value)) {
+    return value.map(v => scrubValue(v, ctx, cwdPathMode, identityMode, undefined, omitRequestDigests))
+  }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value)) out[k] = scrubValue(v, ctx, cwdPathMode, identityMode, k)
+    for (const [k, v] of Object.entries(value)) {
+      if (omitRequestDigests && k === 'requestDigest') continue
+      out[k] = scrubValue(v, ctx, cwdPathMode, identityMode, k, omitRequestDigests)
+    }
     if (
       (value as { sessionUpdate?: unknown }).sessionUpdate === 'usage_update'
       && typeof (value as { used?: unknown }).used === 'number'
@@ -335,8 +341,9 @@ export function normalizeStdout(
  * volatile fields (`createdAt`, `id`, `cwd`) are zeroed/scrubbed; event,
  * historical packed-row, embedded Assistant-stream, goal lifecycle, and
  * catalog child-creation clocks are zeroed; and all volatile strings are
- * scrubbed. Projected inputs remain
- * projected. Packed `data.dt` gaps are normalized even when the projected row
+ * scrubbed. Internal prompt request digests are omitted because their binding
+ * is covered by controller tests rather than snapshot fixtures. Projected
+ * inputs remain projected. Packed `data.dt` gaps are normalized even when the projected row
  * omits its `time0` anchor.
  * Output is JSONL in the same shape as the input — one compact record per
  * line.
@@ -397,7 +404,7 @@ export function normalizeSessionLog(
     if (Object.hasOwn(record, 'sourceEventSeqs')) {
       record.sourceEventSeqs = decodeSeqRanges(record.sourceEventSeqs)
     }
-    return scrubValue(record, ctx, cwdPathMode, identityMode) as Record<string, unknown>
+    return scrubValue(record, ctx, cwdPathMode, identityMode, undefined, true) as Record<string, unknown>
   })
   return records.map(r => JSON.stringify(r)).join('\n') + '\n'
 }
