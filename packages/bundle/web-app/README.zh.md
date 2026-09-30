@@ -66,7 +66,7 @@ dsh --profile web --no-open --port 8080
 
 每个浏览器会话选择一个随发行版交付的 preset（默认 `standard`）。Agent 预设设置页可更改默认项并编辑预设的子插件；保存结果持久化到 `$DSH_HOME/profiles/web/cordis.patch.yml`。只有 Host 提供可编辑的 profile 时，Creator 的插件管理工具才会启用。
 
-`lain42-web`、`lain42-web-coding`、`lain42-web-research` 与 `lain42-web-content` 预设供 Lain42 服务端控制面创建会话时使用。它们共享少量按账号隔离的只读网页与 GitHub 工具，但不开放 shell、文件系统、本机桌面、插件管理或子 Agent 工具。如果客户端已经在用户轮次中加入 `[Lain42 browser-fetched evidence]`，Agent 应使用该结果，不要重复读取同一网页。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
+`lain42-web`、`lain42-web-coding`、`lain42-web-research` 与 `lain42-web-content` 预设供 Lain42 服务端控制面创建会话时使用。它们共享少量按账号隔离的只读网页与 GitHub 工具，但不开放 shell、文件系统、本机桌面、插件管理或子 Agent 工具。公开网页正文只在用户浏览器中读取；如果客户端已经在用户轮次中加入 `[Lain42 browser-fetched evidence]`，Agent 应使用该结果，不要重复读取同一网页。如果浏览器受 CORS 或网络策略限制而无法读取，用户需要粘贴正文或附加文件，服务器不会代为抓取。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
 
 ### Lain42 私有控制面接口
 

@@ -101,10 +101,11 @@ describe('Lain42 account tool relay', () => {
         'lain42_github_pull_requests',
         'lain42_github_repositories',
         'lain42_github_repositories_search',
-        'lain42_web_fetch',
         'lain42_web_search',
       ])
+      expect(names).not.toContain('lain42_web_fetch')
       expect(renderPrompt(await ctx.systemPrompt.assemble())).toContain('The website account OAuth is used for GitHub')
+      expect(renderPrompt(await ctx.systemPrompt.assemble())).toContain('Public page reading is client-only')
 
       const result = await ctx.tools.execute({
         callId: ToolCallId('account-repositories'),
@@ -157,35 +158,6 @@ describe('Lain42 account tool relay', () => {
       expect(rendered).toContain('tool_relay_unavailable')
       expect(rendered).toContain('temporarily unreachable')
       expect(rendered).not.toContain('private network detail')
-    } finally {
-      await plugin.dispose()
-    }
-  })
-
-  it('preserves a bounded non-ASCII page response through the client relay', async () => {
-    vi.stubEnv('LAIN42_AGENT_TOOL_RELAY_URL', 'https://api.lain42.top/api/agent/bridge/v1/tool')
-    vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
-    const pageText = '界'.repeat(50_000)
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ version: 1, result: { text: pageText } }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })))
-
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    const plugin = await ctx.plugin(lain42Tools)
-    try {
-      const result = await ctx.tools.execute({
-        callId: ToolCallId('large-page-1'),
-        name: 'lain42_web_fetch',
-        arguments: { url: 'https://example.com/article' },
-        signal: new AbortController().signal,
-        agent,
-      })
-      const rendered = result.content.map(block => block.type === 'text' ? block.text : '').join('')
-      expect(result.isError).toBe(false)
-      expect(rendered).toContain(pageText)
     } finally {
       await plugin.dispose()
     }
@@ -374,7 +346,6 @@ describe('Lain42 account tool relay', () => {
     try {
       const toolArguments: Array<[string, Record<string, unknown>]> = [
         ['lain42_web_search', { query: 'Rust agents' }],
-        ['lain42_web_fetch', { url: 'https://example.com/' }],
         ['lain42_github_repositories', { limit: 3 }],
         ['lain42_github_repositories_search', { query: 'ast-grep', limit: 3 }],
         ['lain42_github_issues', { repo: 'owner/repo', limit: 3 }],
@@ -391,7 +362,7 @@ describe('Lain42 account tool relay', () => {
         expect(typeof output.result.tool).toBe('string')
       }
       expect(relayedTools).toEqual([
-        'web_search', 'web_fetch', 'github_repositories', 'github_repositories_search',
+        'web_search', 'github_repositories', 'github_repositories_search',
         'github_issues', 'github_pull_requests',
         'github_actions_runs', 'github_actions_jobs', 'github_actions_logs',
       ])
