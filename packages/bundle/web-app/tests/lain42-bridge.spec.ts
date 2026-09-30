@@ -64,7 +64,8 @@ describe('Lain42 private DSH bridge', () => {
         return { accepted: true as const }
       }),
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
-    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>
+      cancel: vi.fn(() => ({ accepted: true as const })),
+    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
@@ -86,6 +87,7 @@ describe('Lain42 private DSH bridge', () => {
       requestId: REQUEST_ID,
       answer: 'DeepSeek is an AI company and model family.',
     })
+    expect(sessionController.cancel).not.toHaveBeenCalled()
     expect(calls).toEqual(['create', 'selectModel', 'prompt'])
     expect(sessionController.selectModel).toHaveBeenCalledWith({
       sessionId: SESSION_ID,
@@ -123,7 +125,8 @@ describe('Lain42 private DSH bridge', () => {
         return { accepted: true as const }
       }),
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
-    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>
+      cancel: vi.fn(() => ({ accepted: true as const })),
+    } satisfies Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>
     const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
@@ -553,11 +556,16 @@ describe('Lain42 private DSH bridge', () => {
     expect(nonErrorWarning).toHaveBeenCalledWith('Lain42 bridge agent_turn_failed (unknown)')
 
     const realSetTimeout = globalThis.setTimeout
+    let fireTurnTimeout: (() => void) | undefined
     vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
-      if (delay === 120_000 && typeof callback === 'function') callback(...args)
+      if (delay === 120_000 && typeof callback === 'function') {
+        fireTurnTimeout = () => callback(...args)
+        return realSetTimeout(() => {}, 2_147_483_647)
+      }
       return realSetTimeout(callback, delay, ...args)
     })
     const timeoutController = inactiveSessionController(async function* (signal) {
+      fireTurnTimeout?.()
       if (signal.aborted) throw signal.reason
       await new Promise<void>((_resolve, reject) => {
         signal.addEventListener('abort', () => { reject(new Error('request aborted')) }, { once: true })
@@ -569,6 +577,7 @@ describe('Lain42 private DSH bridge', () => {
     expect(timedOut.status).toBe(504)
     expect(await timedOut.json()).toEqual({ error: 'agent_turn_timeout' })
     expect(timeoutWarning).toHaveBeenCalledWith('Lain42 bridge agent_turn_timeout (Error)')
+    expect(timeoutController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID })
   })
 
   it('logs registration failures without exposing their private error text', async () => {
@@ -624,12 +633,13 @@ async function* answerEvents(): AsyncGenerator<SessionFollowFrame> {
 
 function inactiveSessionController(
   followFrames: (signal: AbortSignal) => AsyncGenerator<SessionFollowFrame> = () => answerEvents(),
-): Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'> {
+): Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'> {
   return {
     create: vi.fn(async (_request: SessionCreateRequest) => ({ sessionId: SESSION_ID })),
     selectModel: vi.fn(async (request: SessionSelectModelRequest) => ({ selected: request })),
     prompt: vi.fn(async (_request: SessionPromptRequest, _signal: AbortSignal) => ({ accepted: true as const })),
     follow: vi.fn((_request: SessionFollowRequest, signal: AbortSignal) => followFrames(signal)),
+    cancel: vi.fn(() => ({ accepted: true as const })),
   }
 }
 

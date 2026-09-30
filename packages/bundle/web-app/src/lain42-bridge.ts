@@ -91,7 +91,7 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
  * @returns A web route handler for the private turn endpoint.
  */
 export function createLain42BridgeHandler(
-  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>,
+  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>,
   secret: string,
   logWarning: (message: string) => void,
 ): WebRoute['handler'] {
@@ -106,7 +106,7 @@ export function createLain42BridgeHandler(
 async function handleTurn(
   request: IncomingMessage,
   response: ServerResponse,
-  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow'>,
+  sessionController: Pick<SessionController, 'create' | 'selectModel' | 'prompt' | 'follow' | 'cancel'>,
   secret: string,
   nonces: Map<string, number>,
   logWarning: (message: string) => void,
@@ -148,6 +148,7 @@ async function handleTurn(
   const timer = setTimeout(() => {
     controller.abort(timeoutReason)
   }, TURN_TIMEOUT_MS)
+  let promptAccepted = false
   try {
     await sessionController.create({
       sessionId,
@@ -173,6 +174,7 @@ async function handleTurn(
       mode: 'queue',
       content,
     }, controller.signal)
+    promptAccepted = true
     const result = await collectTurn(sessionController, sessionId, requestId, controller.signal)
     if ('failure' in result) {
       writeJson(response, 502, {
@@ -183,6 +185,14 @@ async function handleTurn(
     writeJson(response, 200, { version: 1, requestId: turnRequest.requestId, answer: result.answer })
   } catch (error) {
     const timedOut = controller.signal.reason === timeoutReason
+    if (timedOut && promptAccepted) {
+      try {
+        // Aborting follow only stops this HTTP waiter; ask DSH to stop the admitted turn too.
+        sessionController.cancel({ sessionId })
+      } catch (cancelError) {
+        logWarning(`Lain42 bridge cancellation request failed (${cancelError instanceof Error ? cancelError.name : 'unknown'})`)
+      }
+    }
     const status = timedOut ? 504 : 502
     const code = timedOut ? 'agent_turn_timeout' : 'agent_turn_failed'
     logWarning(`Lain42 bridge ${code} (${error instanceof Error ? error.name : 'unknown'})`)
