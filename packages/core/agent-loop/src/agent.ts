@@ -46,7 +46,14 @@ type Phase =
     lastTurn: number
     wakeRequested: boolean
   }
-  | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
+  | {
+    kind: 'running'
+    abort: AbortController
+    turn: number
+    activeTurn: number | undefined
+    step: number
+    wakeRequested: boolean
+  }
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
 
@@ -179,6 +186,13 @@ export class ReactLoopAgent implements Agent {
     if (this.phase.kind !== 'idle') this.phase.abort.abort(cause)
   }
 
+  cancelActiveTurn(turn: number, cause: AgentCancelCause, options: CancelOptions = {}): boolean {
+    const phase = this.phase
+    if (phase.kind !== 'running' || phase.activeTurn !== turn || phase.abort.signal.aborted) return false
+    this.cancel(cause, options)
+    return true
+  }
+
   runMaintenance<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.phase.kind !== 'idle') throw new Error(`agent "${this.id}" already has active work`)
     const done = Promise.withResolvers<void>()
@@ -227,6 +241,7 @@ export class ReactLoopAgent implements Agent {
       kind: 'running',
       abort: new AbortController(),
       turn: this.phase.lastTurn,
+      activeTurn: undefined,
       step: 0,
       wakeRequested: false,
     })
@@ -306,6 +321,7 @@ export class ReactLoopAgent implements Agent {
       this.throwError(error)
     }
     phase.turn = turn
+    phase.activeTurn = turn
     let turnEnds: TurnEndReason | null = null
     let target: InboxTarget = 'next-turn'
     try {
@@ -362,6 +378,9 @@ export class ReactLoopAgent implements Agent {
       }
       this.throwError(error)
     } finally {
+      // The identity ceases to be cancellable before the durable end append
+      // can synchronously notify observers or a following turn can begin.
+      phase.activeTurn = undefined
       try {
         // oxlint-disable-next-line typescript/no-non-null-assertion -- every exit assigns a turn ending
         this.session.append('turn/end', { turn, reason: turnEnds! })

@@ -624,6 +624,19 @@ export class SessionCommandController {
     if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
       throw apiSessionSubagentOwnershipError(request.sessionId)
     }
+    if (request.turn !== undefined) {
+      if (!Number.isSafeInteger(request.turn) || request.turn < 1) {
+        throw new RemoteError(
+          'gateway/bad-request',
+          'turn must be a positive safe integer',
+          { issues: [{ reason: 'INVALID_CANCEL_TURN' }] },
+        )
+      }
+      return {
+        accepted: true,
+        cancelled: agent.cancelActiveTurn(request.turn, { kind: 'user' }, { keepInbox: true }),
+      }
+    }
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return { accepted: true }
   }

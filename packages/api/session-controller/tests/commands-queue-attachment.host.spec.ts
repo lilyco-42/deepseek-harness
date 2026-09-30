@@ -33,6 +33,7 @@ async function commandHarness(
   inbox: Inbox
   steer: ReturnType<typeof vi.fn>
   cancel: ReturnType<typeof vi.fn>
+  cancelActiveTurn: ReturnType<typeof vi.fn>
 }> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
@@ -80,6 +81,7 @@ async function commandHarness(
   const inbox = createInboxStub()
   const steer = vi.fn((message: UserMessage) => { inbox.append('next-step', message) })
   const cancel = vi.fn()
+  const cancelActiveTurn = vi.fn((turn: number) => turn === 2)
   const agent = {
     id: session.id,
     session,
@@ -89,6 +91,7 @@ async function commandHarness(
     steer,
     followup: vi.fn(),
     cancel,
+    cancelActiveTurn,
   } as unknown as Agent
   await ctx.agents.register(agent)
   ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
@@ -123,6 +126,7 @@ async function commandHarness(
     inbox,
     steer,
     cancel,
+    cancelActiveTurn,
   }
 }
 
@@ -149,7 +153,7 @@ describe('Session queue commands', () => {
   })
 
   it('edits, removes, steers, and rejects stale queue occurrences', async () => {
-    const { ctx, controller, agent, inbox, steer, cancel } = await commandHarness()
+    const { ctx, controller, agent, inbox, steer, cancel, cancelActiveTurn } = await commandHarness()
     const queued = createUserMessage({ content: [{ type: 'text', text: 'queued' }], source: { kind: 'user' } })
     const nextStep = createUserMessage({ content: [{ type: 'text', text: 'step' }], source: { kind: 'user' } })
     inbox.append('next-turn', queued)
@@ -234,6 +238,11 @@ describe('Session queue commands', () => {
     })), 'session/not-found')
     expect(controller.cancel({ sessionId: agent.id })).toEqual({ accepted: true })
     expect(cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+    expect(controller.cancel({ sessionId: agent.id, turn: 1 })).toEqual({ accepted: true, cancelled: false })
+    expect(controller.cancel({ sessionId: agent.id, turn: 2 })).toEqual({ accepted: true, cancelled: true })
+    expect(cancelActiveTurn).toHaveBeenNthCalledWith(1, 1, { kind: 'user' }, { keepInbox: true })
+    expect(cancelActiveTurn).toHaveBeenNthCalledWith(2, 2, { kind: 'user' }, { keepInbox: true })
+    await expectFailure(Promise.resolve().then(() => controller.cancel({ sessionId: agent.id, turn: 0 })), 'gateway/bad-request')
     await ctx.fiber.dispose()
   })
 

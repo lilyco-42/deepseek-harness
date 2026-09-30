@@ -149,6 +149,7 @@ async function handleTurn(
     controller.abort(timeoutReason)
   }, TURN_TIMEOUT_MS)
   let promptAccepted = false
+  let targetTurn: number | undefined
   try {
     await sessionController.create({
       sessionId,
@@ -171,7 +172,9 @@ async function handleTurn(
       content,
     }, controller.signal)
     promptAccepted = true
-    const result = await collectTurn(sessionController, sessionId, requestId, controller.signal)
+    const result = await collectTurn(sessionController, sessionId, requestId, controller.signal, (turn) => {
+      targetTurn = turn
+    })
     if ('failure' in result) {
       writeJson(response, 502, {
         error: result.failure === 'not-found' ? 'agent_turn_unavailable' : 'agent_turn_failed',
@@ -182,11 +185,15 @@ async function handleTurn(
   } catch (error) {
     const timedOut = controller.signal.reason === timeoutReason
     if (timedOut && promptAccepted) {
-      try {
-        // Aborting follow only stops this HTTP waiter; ask DSH to stop the admitted turn too.
-        sessionController.cancel({ sessionId })
-      } catch (cancelError) {
-        logWarning(`Lain42 bridge cancellation request failed (${cancelError instanceof Error ? cancelError.name : 'unknown'})`)
+      if (targetTurn === undefined) {
+        logWarning('Lain42 bridge timed out before its turn was observed; cancellation skipped')
+      } else {
+        try {
+          // Scope cancellation to the exact turn; a delayed waiter must not stop newer work.
+          sessionController.cancel({ sessionId, turn: targetTurn })
+        } catch (cancelError) {
+          logWarning(`Lain42 bridge cancellation request failed (${cancelError instanceof Error ? cancelError.name : 'unknown'})`)
+        }
       }
     }
     if (isRequestIdConflict(error)) {
@@ -209,6 +216,7 @@ async function collectTurn(
   sessionId: SessionId,
   requestId: SessionRequestId,
   signal: AbortSignal,
+  onTargetTurn: (turn: number) => void,
 ): Promise<TurnResult> {
   let currentTurn: number | undefined
   let targetTurn: number | undefined
@@ -227,6 +235,7 @@ async function collectTurn(
         const source = asRecord(data.source)
         if (source?.kind === 'user' && source.rpcId === requestId) {
           targetTurn = currentTurn
+          if (targetTurn !== undefined) onTargetTurn(targetTurn)
           answer = undefined
         }
       } else if (event.type === 'assistant/message' && finiteNumber(data.turn) === targetTurn) {

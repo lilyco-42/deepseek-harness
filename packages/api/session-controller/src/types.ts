@@ -376,11 +376,15 @@ export interface SessionUpdateQueueValue {
 /** Active-turn cancellation request. */
 export interface SessionCancelRequest {
   readonly sessionId: SessionId
+  /** Optional durable turn identity; stale scoped cancellation is a no-op. */
+  readonly turn?: number
 }
 
 /** Receipt after cancellation is admitted to the live Agent. */
 export interface SessionCancelValue {
   readonly accepted: true
+  /** Present only for a turn-scoped cancellation request. */
+  readonly cancelled?: boolean
 }
 
 /** Request to open one path prepared by a Session-aware caller on the Host desktop. */

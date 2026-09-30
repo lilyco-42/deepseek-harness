@@ -58,6 +58,37 @@ function userTexts(agent: Agent): string[] {
 }
 
 describe('Agent.cancel()', () => {
+  it('cancels only the matching active turn and ignores a stale turn after the next turn starts', async () => {
+    const adapter = new MockAdapter([textResponse('second response')])
+    const ctx = await harness(adapter)
+    try {
+      const agent = await ctx.agentLoop.create(SessionId('turn-scoped-cancel'), { provider: 'mock', model: 'mock' })
+      const scopedResults: boolean[] = []
+      ctx.on('agent/request', ({ turn }, next) => {
+        if (turn === 1) scopedResults.push(agent.cancelActiveTurn(1, { kind: 'user' }, { keepInbox: true }))
+        if (turn === 2) scopedResults.push(agent.cancelActiveTurn(1, { kind: 'user' }, { keepInbox: true }))
+        return next()
+      })
+
+      const firstIdle = waitForIdle(ctx, agent)
+      send(agent, 'first turn')
+      await firstIdle
+      const secondIdle = waitForIdle(ctx, agent)
+      send(agent, 'second turn')
+      await secondIdle
+
+      expect(scopedResults).toEqual([true, false])
+      expect(agent.session.snapshotEvents()
+        .filter(event => event.type === 'turn/end')
+        .map(event => event.type === 'turn/end' ? event.data.reason.kind : ''))
+        .toEqual(['aborted', 'completed'])
+      expect(userTexts(agent)).toEqual(['first turn', 'second turn'])
+      expect(adapter.requests).toHaveLength(1)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   /**
    * Cancel one turn, let `mutate` alter the caller's cause the way a transport
    * does once it observes the abort, then report every recorded turn ending.

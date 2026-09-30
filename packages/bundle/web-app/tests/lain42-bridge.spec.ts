@@ -593,6 +593,11 @@ describe('Lain42 private DSH bridge', () => {
       return realSetTimeout(callback, delay, ...args)
     })
     const timeoutController = inactiveSessionController(async function* (signal) {
+      yield wireFrame('turn/start', { turn: 1 })
+      yield wireFrame('user/message', {
+        source: { kind: 'user', rpcId: REQUEST_ID },
+        content: [{ type: 'text', text: 'hello' }],
+      })
       fireTurnTimeout?.()
       if (signal.aborted) throw signal.reason
       await new Promise<void>((_resolve, reject) => {
@@ -605,7 +610,7 @@ describe('Lain42 private DSH bridge', () => {
     expect(timedOut.status).toBe(504)
     expect(await timedOut.json()).toEqual({ error: 'agent_turn_timeout' })
     expect(timeoutWarning).toHaveBeenCalledWith('Lain42 bridge agent_turn_timeout (Error)')
-    expect(timeoutController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID })
+    expect(timeoutController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID, turn: 1 })
 
     for (const [cancelError, errorName] of [
       [new Error('private cancellation detail'), 'Error'],
@@ -613,6 +618,11 @@ describe('Lain42 private DSH bridge', () => {
     ] as const) {
       const cancellationWarning = vi.fn()
       const cancellationFailureController = inactiveSessionController(async function* (signal) {
+        yield wireFrame('turn/start', { turn: 1 })
+        yield wireFrame('user/message', {
+          source: { kind: 'user', rpcId: REQUEST_ID },
+          content: [{ type: 'text', text: 'hello' }],
+        })
         fireTurnTimeout?.()
         if (signal.aborted) throw signal.reason
         await new Promise<void>((_resolve, reject) => {
@@ -626,11 +636,29 @@ describe('Lain42 private DSH bridge', () => {
       const cancellationFailure = await post(cancellationFailureUrl, jsonBody(validRequest()))
       expect(cancellationFailure.status).toBe(504)
       expect(await cancellationFailure.json()).toEqual({ error: 'agent_turn_timeout' })
-      expect(cancellationFailureController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID })
+      expect(cancellationFailureController.cancel).toHaveBeenCalledWith({ sessionId: SESSION_ID, turn: 1 })
       expect(cancellationWarning).toHaveBeenCalledWith(
         `Lain42 bridge cancellation request failed (${errorName})`,
       )
     }
+
+    const unknownTurnWarning = vi.fn()
+    const unknownTurnController = inactiveSessionController(async function* (signal) {
+      fireTurnTimeout?.()
+      if (signal.aborted) throw signal.reason
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => { reject(new Error('request aborted')) }, { once: true })
+      })
+    })
+    const unknownTurnUrl = await listen(
+      createLain42BridgeHandler(unknownTurnController, SECRET, unknownTurnWarning),
+    )
+    const unknownTurn = await post(unknownTurnUrl, jsonBody(validRequest()))
+    expect(unknownTurn.status).toBe(504)
+    expect(unknownTurnController.cancel).not.toHaveBeenCalled()
+    expect(unknownTurnWarning).toHaveBeenCalledWith(
+      'Lain42 bridge timed out before its turn was observed; cancellation skipped',
+    )
   })
 
   it('logs registration failures without exposing their private error text', async () => {
