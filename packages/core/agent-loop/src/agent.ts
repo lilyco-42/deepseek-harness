@@ -444,7 +444,7 @@ export class ReactLoopAgent implements Agent {
         for (const message of decision.messages) {
           this.session.append('user/message', message, { surfaceOp: 'append' })
         }
-        if (this.phase.kind === 'running') this.phase.claimedInput = []
+        this.phase.claimedInput = []
       }
       firstAttempt = false
       const request = this.buildRequest(config, preparedCall, assembly.tools, startsRequestSeries, signal)

@@ -8,7 +8,7 @@ import { ToolCallId, createUserMessage, expandAssistantStream } from '@deepseek-
  * @module dsh-agent-loop/tests/cancel
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SessionStore, { Session, SessionId, SessionLogOffset, TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -201,23 +201,27 @@ describe('Agent.cancel()', () => {
     expect(agent.session.snapshotEvents().some(e => e.type === 'turn/end')).toBe(true)
   })
 
-  it('cancel({ keepInbox: true }) does not restore work already claimed by a waking send', async () => {
+  it('cancel({ keepInbox: true }) records claimed input once without requeueing or requesting a model', async () => {
     const adapter = new MockAdapter([textResponse('wake reply')])
     const ctx = await harness(adapter)
+    onTestFinished(() => ctx.fiber.dispose())
     const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
 
-    agent.followup(createUserMessage({
+    const prompt = createUserMessage({
       content: [{ type: 'text', text: 'preserved' }],
       source: { kind: 'user' },
-    }))
-    // A waking send starts and claims synchronously, so keepInbox has no
-    // pending item to preserve by the time this cancellation runs.
+    })
+    agent.followup(prompt)
+    // The synchronous claim removes the prompt from the inbox; cancellation
+    // before admission retains it in history without putting it back in the queue.
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     expect(agent.session.snapshotEvents().some(event =>
       event.type === 'agent/inbox/spliced' && event.data.outcome === 'canceled')).toBe(false)
     await agent.whenIdle()
     expect(agent.inbox.nextTurn).toHaveLength(0)
-    expect(userTexts(agent)).toEqual([])
+    expect(agent.session.snapshotEvents().flatMap(event =>
+      event.type === 'user/message' ? [event.data] : [])).toEqual([prompt])
+    expect(agent.session.snapshotEvents().some(event => event.type === 'system/message')).toBe(false)
     expect(adapter.requests).toHaveLength(0)
     expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')?.data.reason)
       .toEqual({ kind: 'aborted', reason: { kind: 'user' } })
@@ -225,8 +229,13 @@ describe('Agent.cancel()', () => {
     const idle = waitForIdle(ctx, agent)
     send(agent, 'wake it')
     await idle
-    expect(userTexts(agent)).toEqual(['wake it'])
+    expect(userTexts(agent)).toEqual(['preserved', 'wake it'])
     expect(adapter.requests).toHaveLength(1)
+    expect(adapter.requests[0]?.messages
+      .filter(message => message.role === 'user')
+      .flatMap(message => message.content)
+      .flatMap(block => block.type === 'text' ? [block.text] : []))
+      .toEqual(['preserved', 'wake it'])
   })
 
   it('cancel({ keepInbox: true }) parks queued work after an active turn aborts', async () => {
