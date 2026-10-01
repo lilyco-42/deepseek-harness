@@ -44,7 +44,7 @@ class CancellableReplayAdapter extends QueueReplayAdapter {
       if (signal.aborted) resolve()
       else signal.addEventListener('abort', () => { resolve() }, { once: true })
     })
-    yield { type: 'finish', reason: { kind: 'aborted' } }
+    yield { type: 'finish', reason: { kind: 'aborted', failure: { code: 'ABORTED', message: 'Request canceled' } } }
   }
 }
 
