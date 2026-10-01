@@ -37,6 +37,7 @@ jobs:
         run: |
           pnpm run gen-cordis-catalog
           pnpm run gen-doc-graphs
+          pnpm run gen-persistence-catalog
       - name: Upload generated cancellation references
         uses: actions/upload-artifact@v4
         with:
@@ -47,6 +48,10 @@ jobs:
             docs/subsystems/session.zh.md
             docs/subsystems/session.i18n.yaml
             docs/event-producer-consumer.md
+            docs/persistence-schema.json
+            docs/persistence-catalog.md
+            docs/persistence-catalog.zh.md
+            docs/persistence-catalog.i18n.yaml
           if-no-files-found: error
       - name: Build required native system dependency
         run: pnpm run build:native-system
