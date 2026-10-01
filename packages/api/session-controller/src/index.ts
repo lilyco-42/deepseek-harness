@@ -35,6 +35,8 @@ import type {
   SessionAttachmentValue,
   SessionCancelRequest,
   SessionCancelValue,
+  SessionCancelPromptRequest,
+  SessionCancelPromptValue,
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
@@ -438,6 +440,16 @@ export class SessionController extends TypertRemoteService {
   @Remote('cancel')
   cancel(request: SessionCancelRequest): SessionCancelValue {
     return this.commands.cancel(request)
+  }
+
+  /**
+   * Cancel only work belonging to one original accepted prompt.
+   * @param request - Session and original prompt identity.
+   * @returns admitted action, not a claim of completed turn settlement.
+   */
+  @Remote('cancelPrompt')
+  cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue> {
+    return this.commands.cancelPrompt(request)
   }
 
   /**

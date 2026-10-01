@@ -387,6 +387,18 @@ export interface SessionCancelValue {
   readonly cancelled?: boolean
 }
 
+/** Target one accepted prompt without cancelling unrelated queued or newer work. */
+export interface SessionCancelPromptRequest {
+  readonly sessionId: SessionId
+  /** Original client-minted prompt identity, not a replacement request id. */
+  readonly requestId: SessionRequestId
+}
+
+/** A cancellation request is not proof that an executing turn has finished. */
+export type SessionCancelPromptValue =
+  | { readonly accepted: true; readonly status: 'removed' | 'not-active' | 'not-found' | 'unsupported' }
+  | { readonly accepted: true; readonly status: 'cancellation-requested'; readonly turn: number }
+
 /** Request to open one path prepared by a Session-aware caller on the Host desktop. */
 export interface SessionOpenWorkspacePathRequest {
   /** File-manager navigation when requested; omission uses the default application. */

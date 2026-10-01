@@ -1,4 +1,5 @@
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, Inbox, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
@@ -12,9 +13,10 @@ import SessionStore, {
 import type { SessionEvent, SessionHeader, UserMessage } from '@deepseek-ai/dsh-session'
 import { snapshotSubagentDescriptor, SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ApiSessionAgentController } from '../src/agent.ts'
 import { SessionCommandController } from '../src/commands.ts'
+import type { SessionRequestId } from '../src/types.ts'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { installSessionReadTestServices, testSessionPersistence } from './test-remote.ts'
 
@@ -380,6 +382,97 @@ async function persistedController(
   const agents = { resolveAgent: vi.fn() } as unknown as ApiSessionAgentController
   return { ctx, controller: new SessionCommandController(ctx, agents, '/workspace'), sessionId }
 }
+
+describe('prompt-identity cancellation', () => {
+  const requestId = brandString<SessionRequestId>('cancel-owned-request')
+  const promptMessage = () => createUserMessage({
+    content: [{ type: 'text', text: 'owned request' }],
+    source: { kind: 'user', rpcId: requestId },
+  })
+
+  it.each(['next-turn', 'next-step'] as const)('removes only the matching %s prompt', async (target) => {
+    const { ctx, controller, agent, inbox, cancel, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    ctx.provide('fileUploads', { retirePrompt: vi.fn() } as never)
+    const owned = promptMessage()
+    const unrelated = createUserMessage({ content: [], source: { kind: 'user' } })
+    const context = createUserMessage({ content: [], source: { kind: 'test' } })
+    inbox.append(target, owned)
+    inbox.append(target, unrelated)
+    inbox.append(target, context)
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'removed' })
+    expect(target === 'next-turn' ? inbox.nextTurn : inbox.nextStep).toEqual([unrelated, context])
+    expect(ctx.fileUploads.retirePrompt).toHaveBeenCalledWith(agent, requestId)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(cancelActiveTurn).not.toHaveBeenCalled()
+  })
+
+  it('does not reserve an unknown identity or guess an active turn', async () => {
+    const { ctx, controller, agent, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'not-found' })
+    agent.session.append('user/message', promptMessage(), { surfaceOp: 'append' })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'not-active' })
+    expect(cancelActiveTurn).not.toHaveBeenCalled()
+  })
+
+  it.each([1, 2])('scopes an admitted request to its durable turn %s', async (turn) => {
+    const { ctx, controller, agent, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    agent.session.append('turn/start', { turn })
+    agent.session.append('user/message', promptMessage(), { surfaceOp: 'append' })
+    agent.session.append('user/message', createUserMessage({ content: [], source: { kind: 'test' } }), { surfaceOp: 'append' })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual(turn === 2
+        ? { accepted: true, status: 'cancellation-requested', turn }
+        : { accepted: true, status: 'not-active' })
+    expect(cancelActiveTurn).toHaveBeenCalledWith(turn, { kind: 'user' }, { keepInbox: true })
+  })
+
+  it('recovers a claimed prompt before user-message admission, without confusing discard with claim', async () => {
+    const { ctx, controller, agent, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    const owned = promptMessage()
+    const unrelated = createUserMessage({ content: [], source: { kind: 'test' } })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [owned, unrelated] })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' })
+    agent.session.append('turn/start', { turn: 2 })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'not-active' })
+    expect(cancelActiveTurn).not.toHaveBeenCalled()
+    agent.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [owned] })
+    agent.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'cancellation-requested', turn: 2 })
+    expect(cancelActiveTurn).toHaveBeenCalledWith(2, { kind: 'user' }, { keepInbox: true })
+  })
+
+  it('reports unsupported scoped cancellation without falling back to cancelling newer work', async () => {
+    const { ctx, controller, agent, cancel } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    agent.session.append('turn/start', { turn: 2 })
+    agent.session.append('user/message', promptMessage(), { surfaceOp: 'append' })
+    Object.assign(agent, { cancelActiveTurn: undefined })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'unsupported' })
+    expect(cancel).not.toHaveBeenCalled()
+  })
+
+  it('retains missing-session and subagent ownership errors', async () => {
+    const ordinary = await commandHarness()
+    onTestFinished(() => ordinary.ctx.fiber.dispose())
+    await expect(ordinary.controller.cancelPrompt({ sessionId: SessionId('missing'), requestId }))
+      .rejects.toMatchObject({ code: 'session/not-found' })
+    const child = await commandHarness('continuable')
+    onTestFinished(() => child.ctx.fiber.dispose())
+    await expect(child.controller.cancelPrompt({ sessionId: child.agent.id, requestId }))
+      .rejects.toMatchObject({ code: 'session/agent-busy' })
+  })
+})
 
 describe('Session attachment authorization', () => {
   it.each([

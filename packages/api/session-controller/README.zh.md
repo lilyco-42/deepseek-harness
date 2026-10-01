@@ -25,6 +25,8 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
+`session.cancelPrompt({ sessionId, requestId })` 针对原始已接收提示。它在提示接收操作之后串行执行，只移除对应排队项，或请求取消该提示所属的准确活动轮次，并保留其他排队任务。回执区分 `removed`、带轮次的 `cancellation-requested`、`not-active`、`not-found` 与 `unsupported`；收到取消请求不等于执行中的轮次已经结束，最终结果应跟随持久事件确认。未知编号不会预留未来任务，因此网站调用方须负责接收顺序；网络断线不能自动发出此命令。子智能体会话仍受普通取消操作的所有权限制。
+
 每个 prompt request id 都与内容、投递模式、有效模型以及可选执行上下文摘要共同绑定，形成 SHA-256 摘要。准入处理中，或提示已写入持久收件箱、用户消息日志后，完全相同的重试会返回原接受结果。删除或编辑排队工作会保留原请求编号；重试不会重新插入已删除的工作。输入不同或历史记录无法验证时，重复使用该 ID 会返回 `gateway/bad-request`（`REQUEST_ID_CONFLICT`），不会再次入队，也不会改变请求模型。Prompt 可选模型仅在新请求准入时解析和应用，不会更改部署默认模型。
 
 会话模型选择操作会为指定 Session 记录经验证的模型选择；默认还会将它保存为没有已记录模型选择的 Session 所使用的部署默认值。模型由 DSH 之外的账号范围决定时，调用方应将 persistDefault 设为 false，避免改动指定 Session 之外的默认模型。

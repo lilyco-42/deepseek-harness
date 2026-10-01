@@ -38,6 +38,8 @@ import type {
   SessionAttachmentValue,
   SessionCancelRequest,
   SessionCancelValue,
+  SessionCancelPromptRequest,
+  SessionCancelPromptValue,
   SessionCreateRequest,
   SessionCreateValue,
   SessionForkRequest,
@@ -641,6 +643,36 @@ export class SessionCommandController {
     return { accepted: true }
   }
 
+  /**
+   * Remove one queued prompt or request cancellation of its exact active turn.
+   * @param request - Session and original accepted prompt identity.
+   * @returns the action admitted; callers follow durable events for final settlement.
+   */
+  async cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue> {
+    const agent = await this.resolveAgent(request.sessionId)
+    if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
+      throw apiSessionSubagentOwnershipError(request.sessionId)
+    }
+    return this.agents.serializeRequestAdmission<SessionCancelPromptValue>(agent, async () => {
+      const queued = [...agent.inbox.nextTurn, ...agent.inbox.nextStep]
+        .find(message => isPromptRequestSource(message.source, request.requestId))
+      if (queued !== undefined) {
+        agent.inbox.remove(queued.id)
+        this.ctx.fileUploads.retirePrompt(agent, request.requestId)
+        return { accepted: true, status: 'removed' }
+      }
+      if (findPromptRequest(agent, request.requestId) === undefined) {
+        return { accepted: true, status: 'not-found' }
+      }
+      const turn = findPromptClaimTurn(agent.session, request.requestId)
+      if (turn === undefined) return { accepted: true, status: 'not-active' }
+      if (agent.cancelActiveTurn === undefined) return { accepted: true, status: 'unsupported' }
+      return agent.cancelActiveTurn(turn, { kind: 'user' }, { keepInbox: true })
+        ? { accepted: true, status: 'cancellation-requested', turn }
+        : { accepted: true, status: 'not-active' }
+    })
+  }
+
   private async resolveAgent(sessionId: SessionId): Promise<Agent> {
     const found = await this.agents.resolveAgent(sessionId)
     if ('error' in found) throw found.error
@@ -755,6 +787,34 @@ function findPromptRequest(agent: Agent, requestId: SessionRequestId): PromptReq
     }
   }
   return found
+}
+
+/** Identify a prompt independently of provider-generated or uncorrelated input. */
+function isPromptRequestSource(source: MessageSource, requestId: SessionRequestId): boolean {
+  return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+}
+
+/** Recover the owning turn even while claimed input is waiting at pre-step admission. */
+function findPromptClaimTurn(session: Session, requestId: SessionRequestId): number | undefined {
+  const queues: Record<'next-turn' | 'next-step', UserMessage[]> = { 'next-turn': [], 'next-step': [] }
+  let currentTurn: number | undefined
+  let targetTurn: number | undefined
+  // oxlint-disable-next-line typescript/no-deprecated -- Exact durable Inbox claim history has no read projection.
+  for (const event of session.snapshotEvents()) {
+    if (event.type === 'turn/start') {
+      currentTurn = event.data.turn
+    } else if (event.type === 'user/message' && isPromptRequestSource(event.data.source, requestId)) {
+      targetTurn = currentTurn
+    } else if (event.type === 'agent/inbox/spliced') {
+      const splice = event.data
+      const removed = queues[splice.target].splice(splice.start, splice.removedCount ?? 0, ...splice.inserted)
+      if (splice.outcome !== 'canceled'
+        && removed.some(message => isPromptRequestSource(message.source, requestId))) {
+        targetTurn = currentTurn
+      }
+    }
+  }
+  return targetTurn
 }
 
 function promptRequestDigest(

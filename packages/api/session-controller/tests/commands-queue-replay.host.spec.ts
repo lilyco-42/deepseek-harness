@@ -1,8 +1,8 @@
 /** Request replay against the production driver and its durable Inbox projection. */
 import { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, LlmAdapter } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import {
   mountAgentLoopTestDependencies,
@@ -18,9 +18,15 @@ import { createSessionTestController } from './test-remote.ts'
 class QueueReplayAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = []
 
+  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({ provider, id: model, name: model })
+  }
+
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.requests.push(options)
+    yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: 'Unexpected removed work' }
+    yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Unexpected removed work' } }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
 }
@@ -66,6 +72,8 @@ describe('removed request replay with a production Agent Inbox', () => {
         itemId: queued.id,
         action: { kind: 'remove' },
       })).resolves.toEqual({ accepted: true })
+      await expect(controller.cancelPrompt({ sessionId: agent.id, requestId: request.requestId }))
+        .resolves.toEqual({ accepted: true, status: 'not-active' })
       expect(agent.session.snapshotEvents().at(-1)).toMatchObject({
         type: 'agent/inbox/spliced',
         data: {
@@ -99,4 +107,67 @@ describe('removed request replay with a production Agent Inbox', () => {
       expect(agent.session.snapshotEvents().some(event => event.type === 'turn/start')).toBe(false)
     },
   )
+})
+
+it('cancels an actually claimed prompt before model admission and cannot stop a newer turn', async () => {
+  const ctx = new Context()
+  const firstStarted = Promise.withResolvers<undefined>()
+  const firstRelease = Promise.withResolvers<undefined>()
+  const secondStarted = Promise.withResolvers<AbortSignal>()
+  const secondRelease = Promise.withResolvers<undefined>()
+  onTestFinished(async () => {
+    firstRelease.resolve(undefined)
+    secondRelease.resolve(undefined)
+    await ctx.fiber.dispose()
+  })
+  await mountAgentLoopTestDependencies(ctx)
+  const loop = await mountAgentLoopTestHarness(ctx)
+  const adapter = new QueueReplayAdapter()
+  ctx.llm.registerAdapter(['queue-replay'], adapter)
+  const selection = { provider: 'queue-replay', model: 'queue-replay-model' }
+  const agent = await loop.create(SessionId('cancel-claimed-prompt'), selection, { cwd: '/workspace' })
+  const controller = createSessionTestController(ctx, {
+    defaultModelSelection: () => selection,
+    cwd: '/workspace',
+  })
+  ctx.on('agent/pre-step', async ({ turn, signal }, next) => {
+    if (turn === 1) {
+      firstStarted.resolve(undefined)
+      await firstRelease.promise
+    } else if (turn === 2) {
+      secondStarted.resolve(signal)
+      await secondRelease.promise
+    }
+    return next()
+  })
+  const request: SessionPromptRequest = {
+    sessionId: agent.id,
+    requestId: brandString<SessionRequestId>('claimed-cancel-original'),
+    mode: 'queue',
+    content: [{ type: 'text', text: 'Stop only this request' }],
+  }
+  await controller.prompt(request, new AbortController().signal)
+  await firstStarted.promise
+  expect(agent.inbox.nextTurn).toEqual([])
+  expect(agent.session.snapshotEvents().some(event => event.type === 'user/message')).toBe(false)
+  await expect(controller.cancelPrompt({ sessionId: agent.id, requestId: request.requestId }))
+    .resolves.toEqual({ accepted: true, status: 'cancellation-requested', turn: 1 })
+  firstRelease.resolve(undefined)
+  await agent.whenIdle()
+  expect(adapter.requests).toEqual([])
+  expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+    .toMatchObject({ data: { turn: 1, reason: { kind: 'aborted' } } })
+  // Exact replay of the cancelled prompt must not become another queued task.
+  await expect(controller.prompt(request, new AbortController().signal)).resolves.toEqual({ accepted: true })
+  expect(agent.inbox.nextTurn).toEqual([])
+  agent.followup(createUserMessage({ content: [{ type: 'text', text: 'New work' }], source: { kind: 'user' } }))
+  const nextSignal = await secondStarted.promise
+  await expect(controller.cancelPrompt({ sessionId: agent.id, requestId: request.requestId }))
+    .resolves.toEqual({ accepted: true, status: 'not-active' })
+  expect(nextSignal.aborted).toBe(false)
+  secondRelease.resolve(undefined)
+  await agent.whenIdle()
+  expect(adapter.requests).toHaveLength(1)
+  expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+    .toMatchObject({ data: { turn: 2, reason: { kind: 'completed' } } })
 })
