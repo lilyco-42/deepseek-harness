@@ -30,11 +30,11 @@ describe('removed request replay with a production Agent Inbox', () => {
     'retains an accepted %s identity after command-owner replacement without running removed work',
     async (mode) => {
       const ctx = new Context()
-      const release = Promise.withResolvers<void>()
-      let maintenance: Promise<void> | undefined
+      const release = Promise.withResolvers<undefined>()
+      const maintenance: { result?: Promise<void> } = {}
       onTestFinished(async () => {
-        release.resolve()
-        try { await maintenance }
+        release.resolve(undefined)
+        try { await maintenance.result }
         finally { await ctx.fiber.dispose() }
       })
       await mountAgentLoopTestDependencies(ctx)
@@ -49,7 +49,7 @@ describe('removed request replay with a production Agent Inbox', () => {
       })
       // Public maintenance holds the real driver before it can claim a prompt.
       // No synthetic inbox events, turn-end notifications, or followup stubs.
-      maintenance = agent.runMaintenance(() => release.promise)
+      maintenance.result = agent.runMaintenance(() => release.promise)
       const request: SessionPromptRequest = {
         sessionId: agent.id,
         requestId: brandString<SessionRequestId>(`removed-${mode}`),
@@ -92,8 +92,8 @@ describe('removed request replay with a production Agent Inbox', () => {
         code: 'gateway/bad-request',
         details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
       })
-      release.resolve()
-      await maintenance
+      release.resolve(undefined)
+      await maintenance.result
       await agent.whenIdle()
       expect(adapter.requests).toEqual([])
       expect(agent.session.snapshotEvents().some(event => event.type === 'turn/start')).toBe(false)
