@@ -20,6 +20,43 @@ concurrency:
 
 jobs:
 
+  request-lifecycle:
+    if: github.event_name == 'pull_request' && github.repository == 'lilyco-42/deepseek-harness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    name: node 24 / request lifecycle
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+      - name: Generate cancellation contract references
+        run: |
+          pnpm run gen-cordis-catalog
+          pnpm run gen-doc-graphs
+      - name: Upload generated cancellation references
+        uses: actions/upload-artifact@v4
+        with:
+          name: request-lifecycle-generated-${{ github.sha }}
+          path: |
+            packages/extensions/tool-cordis/src/api-catalog.ts
+            docs/subsystems/session.md
+            docs/subsystems/session.zh.md
+            docs/subsystems/session.i18n.yaml
+            docs/event-producer-consumer.md
+          if-no-files-found: error
+      - name: Build required native system dependency
+        run: pnpm run build:native-system
+      - name: Verify original-request cancellation and replay
+        run: >-
+          pnpm exec vitest run
+          packages/api/session-controller/tests/commands-queue-attachment.host.spec.ts
+          packages/api/session-controller/tests/commands-queue-replay.host.spec.ts
+          packages/api/session-controller/tests/controller.host.spec.ts
+
   # Three enterprise jobs isolate coverage, static analysis, and the
   # build-backed consumer tail. The consumer job owns the only Linux build so
   # all three jobs enter runner allocation independently.
