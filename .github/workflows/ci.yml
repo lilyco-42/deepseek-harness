@@ -127,6 +127,7 @@ jobs:
             docs/subsystems/*.md
             docs/subsystems/*.yaml
             docs/cordis-api/inherited.md
+            packages/extensions/tool-cordis/src/api-catalog.ts
           if-no-files-found: error
 
       - name: Upload regenerated config catalog
