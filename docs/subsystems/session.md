@@ -902,6 +902,13 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('cancel') cancel(request: SessionCancelRequest): SessionCancelValue
 
 /**
+ * Cancel only work belonging to one original accepted prompt.
+ * @param request - Session and original prompt identity.
+ * @returns admitted action, not a claim of completed turn settlement.
+ */
+@Remote('cancelPrompt') cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue>
+
+/**
  * Read one cold-safe, message-aligned Session history page.
  * @param request - durable address, backward cursor, and page budget.
  * @param signal - cancellation for persistence reads.

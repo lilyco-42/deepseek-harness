@@ -82,15 +82,12 @@ describe('SessionController facade', () => {
     }
     await expect(resolveUploadAgent(sessionId)).resolves.toBe(agent)
     const activationError = new RemoteError('session/not-found', 'missing upload session', { sessionId })
-    vi.spyOn(
+    const resolveAgent = vi.spyOn(
       (controller as unknown as { agents: ApiSessionAgentController }).agents,
       'resolveAgent',
     ).mockResolvedValueOnce({ error: activationError })
     await expect(resolveUploadAgent(sessionId)).rejects.toBe(activationError)
-    vi.spyOn(
-      (controller as unknown as { agents: ApiSessionAgentController }).agents,
-      'resolveAgent',
-    ).mockResolvedValueOnce({ error: activationError })
+    resolveAgent.mockResolvedValueOnce({ error: activationError })
     await expect(controller.cancelPrompt({
       sessionId,
       requestId: 'controller-cancel-rpc' as SessionRequestId,

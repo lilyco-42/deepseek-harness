@@ -31,6 +31,23 @@ class QueueReplayAdapter extends LlmAdapter {
   }
 }
 
+/** External inference that stays open until its production cancellation signal arrives. */
+class CancellableReplayAdapter extends QueueReplayAdapter {
+  readonly started = Promise.withResolvers<AbortSignal>()
+
+  override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const signal = options.signal
+    if (signal === undefined) throw new Error('The production loop must supply a cancellation signal')
+    this.requests.push(options)
+    this.started.resolve(signal)
+    await new Promise<void>((resolve) => {
+      if (signal.aborted) resolve()
+      else signal.addEventListener('abort', () => { resolve() }, { once: true })
+    })
+    yield { type: 'finish', reason: { kind: 'aborted' } }
+  }
+}
+
 describe('removed request replay with a production Agent Inbox', () => {
   it.each(['queue', 'steer'] as const)(
     'retains an accepted %s identity after command-owner replacement without running removed work',
@@ -170,4 +187,39 @@ it('cancels an actually claimed prompt before model admission and cannot stop a 
   expect(adapter.requests).toHaveLength(1)
   expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
     .toMatchObject({ data: { turn: 2, reason: { kind: 'completed' } } })
+})
+
+it('propagates request-scoped cancellation to an executing model and records its terminal outcome', async () => {
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  await mountAgentLoopTestDependencies(ctx)
+  const loop = await mountAgentLoopTestHarness(ctx)
+  const adapter = new CancellableReplayAdapter()
+  ctx.llm.registerAdapter(['queue-replay'], adapter)
+  const selection = { provider: 'queue-replay', model: 'queue-replay-model' }
+  const agent = await loop.create(SessionId('cancel-running-prompt'), selection, { cwd: '/workspace' })
+  const controller = createSessionTestController(ctx, {
+    defaultModelSelection: () => selection,
+    cwd: '/workspace',
+  })
+  const request: SessionPromptRequest = {
+    sessionId: agent.id,
+    requestId: brandString<SessionRequestId>('running-cancel-original'),
+    mode: 'queue',
+    content: [{ type: 'text', text: 'Cancel this executing request' }],
+  }
+  await controller.prompt(request, new AbortController().signal)
+  const inferenceSignal = await adapter.started.promise
+  expect(inferenceSignal.aborted).toBe(false)
+  await expect(controller.cancelPrompt({ sessionId: agent.id, requestId: request.requestId }))
+    .resolves.toEqual({ accepted: true, status: 'cancellation-requested', turn: 1 })
+  expect(inferenceSignal.aborted).toBe(true)
+  await agent.whenIdle()
+  expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end'))
+    .toMatchObject({ data: { turn: 1, reason: { kind: 'aborted' } } })
+  await expect(controller.prompt(request, new AbortController().signal)).resolves.toEqual({ accepted: true })
+  await agent.whenIdle()
+  expect(adapter.requests).toHaveLength(1)
+  await expect(controller.cancelPrompt({ sessionId: agent.id, requestId: request.requestId }))
+    .resolves.toEqual({ accepted: true, status: 'not-active' })
 })
