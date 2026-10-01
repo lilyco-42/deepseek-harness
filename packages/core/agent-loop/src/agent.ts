@@ -406,7 +406,18 @@ export class ReactLoopAgent implements Agent {
     const renderedPrompt = renderPrompt(assembly)
     let firstAttempt = true
     while (true) {
-      const { config, preparedCall } = await this.prepareRequest(turn, step, signal)
+      const { config, preparedCall } = await this.prepareRequest(turn, step, signal).catch((error: unknown) => {
+        // A request can be cancelled while provider/model admission is still
+        // running. The inbox was already claimed, so retain that user input in
+        // the durable transcript even though no model request was admitted.
+        if (firstAttempt) {
+          for (const message of decision.messages) {
+            this.session.append('user/message', message, { surfaceOp: 'append' })
+          }
+          firstAttempt = false
+        }
+        throw error
+      })
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
       const commits = this.systemPrompt.project(renderedPrompt, {
         inHistory: preparedCall?.systemPromptUpdate === 'in-history',

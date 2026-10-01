@@ -251,6 +251,17 @@ describe('Session queue commands', () => {
     await ctx.fiber.dispose()
   })
 
+  it('reports a turn-scoped cancel as not cancelled when the runtime lacks that capability', async () => {
+    const { ctx, controller, agent } = await commandHarness()
+    Object.assign(agent, { cancelActiveTurn: undefined })
+    try {
+      expect(controller.cancel({ sessionId: agent.id, turn: 1 }))
+        .toEqual({ accepted: true, cancelled: false })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it.each(['continuable', 'seeded-continuable'] as const)(
     'mutates both inbox destinations of a live %s child while its parent is offline',
     async (childMode) => {

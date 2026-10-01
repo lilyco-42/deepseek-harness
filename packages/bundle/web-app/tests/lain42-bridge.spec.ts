@@ -521,6 +521,9 @@ describe('Lain42 private DSH bridge', () => {
   it('returns unavailable when no matching user turn is present', async () => {
     const sessionController = inactiveSessionController(() => frames([
       assistantStreamFrame(),
+      // A bounded snapshot may retain this request message without its older
+      // turn/start record; without a turn identity, the bridge cannot cancel it.
+      wireFrame('user/message', { source: { kind: 'user', rpcId: REQUEST_ID } }),
       wireFrame('turn/start', { turn: 'invalid' }),
       wireFrame('turn/start', { turn: 1.5 }),
       wireFrame('turn/start', { turn: -1 }),
@@ -536,6 +539,7 @@ describe('Lain42 private DSH bridge', () => {
 
     expect(response.status).toBe(502)
     expect(await response.json()).toEqual({ error: 'agent_turn_unavailable' })
+    expect(sessionController.cancel).not.toHaveBeenCalled()
   })
 
   it('returns a failed-turn response when the durable turn did not complete', async () => {
