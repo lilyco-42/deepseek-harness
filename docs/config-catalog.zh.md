@@ -230,7 +230,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/api/session-controller/src/index.ts:79`](../packages/api/session-controller/src/index.ts)
+来源： [`packages/api/session-controller/src/index.ts:81`](../packages/api/session-controller/src/index.ts)
 
 <a id="deepseek-aidsh-api-settings-controller"></a>
 
