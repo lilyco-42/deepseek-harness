@@ -114,6 +114,21 @@ jobs:
         if: failure() && steps.static.outcome == 'failure'
         run: pnpm run gen-config-catalog
 
+      - name: Regenerate Cordis reference for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-cordis-catalog
+
+      - name: Upload regenerated Cordis reference
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cordis-reference-generated-${{ github.sha }}
+          path: |
+            docs/subsystems/*.md
+            docs/subsystems/*.yaml
+            docs/cordis-api/inherited.md
+          if-no-files-found: error
+
       - name: Upload regenerated config catalog
         if: failure() && steps.static.outcome == 'failure'
         uses: actions/upload-artifact@v4

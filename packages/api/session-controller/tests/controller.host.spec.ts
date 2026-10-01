@@ -8,6 +8,7 @@ import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import SessionController from '../src/index.ts'
 import type { ApiSessionAgentController } from '../src/agent.ts'
+import type { SessionRequestId } from '../src/types.ts'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
 
 const defaults = {
@@ -86,6 +87,14 @@ describe('SessionController facade', () => {
       'resolveAgent',
     ).mockResolvedValueOnce({ error: activationError })
     await expect(resolveUploadAgent(sessionId)).rejects.toBe(activationError)
+    vi.spyOn(
+      (controller as unknown as { agents: ApiSessionAgentController }).agents,
+      'resolveAgent',
+    ).mockResolvedValueOnce({ error: activationError })
+    await expect(controller.cancelPrompt({
+      sessionId,
+      requestId: 'controller-cancel-rpc' as SessionRequestId,
+    })).rejects.toBe(activationError)
     const consumeSelection = vi.spyOn(
       (controller as unknown as { agents: ApiSessionAgentController }).agents,
       'consumeSelection',

@@ -374,6 +374,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SessionAttachmentValue: 'session.md',
   SessionCancelRequest: 'session.md',
   SessionCancelValue: 'session.md',
+  SessionCancelPromptRequest: 'session.md',
+  SessionCancelPromptValue: 'session.md',
   SessionControlFrame: 'session.md',
   SessionCreateRequest: 'session.md',
   SessionCreateValue: 'session.md',
