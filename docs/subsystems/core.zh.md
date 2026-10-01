@@ -81,7 +81,8 @@ interface Agent {
    * turn or between-turn task. The first cause wins for that activity. With no
    * active activity, cancellation is a no-op and does not arm later work.
    * @param cause - the stable caller intent carried by the active operation signal.
-   * @param options - cancellation options; `keepInbox` preserves pending work.
+   * @param options - cancellation options. `keepInbox` preserves pending work
+   *   and records claimed input when cancellation precedes request admission.
    */
   cancel(cause: AgentCancelCause, options?: CancelOptions): void
 
@@ -89,7 +90,8 @@ interface Agent {
    * Cancel only when the expected durable turn is still the active turn.
    * @param turn - turn number observed for the request being cancelled.
    * @param cause - stable caller intent carried by the active operation signal.
-   * @param options - cancellation options; `keepInbox` preserves pending work.
+   * @param options - cancellation options. `keepInbox` preserves pending work
+   *   and records claimed input when cancellation precedes request admission.
    * @returns whether that exact turn was active and cancellation was requested.
    */
   cancelActiveTurn?(turn: number, cause: AgentCancelCause, options?: CancelOptions): boolean
@@ -293,9 +295,10 @@ type InboxTarget = 'next-turn' | 'next-step'
 /** Options for {@link Agent.cancel}. */
 interface CancelOptions {
   /**
-   * Preserve queued and steering inbox items instead of discarding them. The
-   * active turn is still aborted, but un-started and pending work survives for a
-   * later turn and no canceled inbox splice is logged.
+   * Preserve queued and steering inbox items without logging their removal. If
+   * cancellation arrives before request admission, the loop records the claimed
+   * inbox batch without generated pre-step context or the system prompt; the
+   * active turn still aborts.
    */
   keepInbox?: boolean | undefined
 }

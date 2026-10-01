@@ -17,15 +17,15 @@ The existing regression scenario is `packages/core/agent-loop/tests/cancel.spec.
 
 ## Fix in progress
 
-The first admission failure now writes the claimed user messages to the transcript before propagating the failure. This keeps cancelled input visible without sending it to the model or duplicating it on later request retries. Additional regression cases cover the compatibility fallback for runtimes without turn-scoped cancellation and bridge snapshots whose matching user event lacks a preceding turn identity.
+The loop now tracks the original inbox batch separately from messages added by `agent/pre-step`. Cancellation before request admission commits that original batch only when the caller explicitly sets `keepInbox`; it never commits generated pre-step context or the system prompt. Default cancellation still commits no model input. Once request admission succeeds, the ordinary first-attempt append path owns the messages, avoiding duplicates across retries. Regression coverage exercises both turn-scoped `keepInbox` cancellation and the existing default-cancellation admission cases.
 
 ## Verification
 
 - Reproduced by GitHub Actions run `36791851668`, Linux exhaustive coverage.
 - Linux CI also identified two uncovered compatibility branches; regression coverage was added.
-- The fix has not yet been run through Actions. Local builds and tests are intentionally not used for this repository.
-- Windows coverage for run `36791851668` is still running; real-model E2E is skipped because its external secret is unavailable.
+- The corrected behavior has not yet been run through a fresh Actions workflow. Local builds and tests are intentionally not used for this repository.
+- The earlier workflow exposed a regression in default cancellation: it committed the entire prepared message list. The corrected change narrows preservation to explicitly requested `keepInbox` cancellation and the original claimed inbox batch.
 
 ## Prevention
 
-Once a user message has been claimed for a turn, every exit before model admission must either preserve it in durable history or deliberately restore it to the inbox. Cancellation tests should assert both the terminal turn state and the durable user transcript.
+Cancellation before request admission must preserve claimed inbox input only when `keepInbox` requests it; default cancellation must leave no user or system messages committed. Tests assert both the terminal turn state and the durable transcript, including pre-step context boundaries.

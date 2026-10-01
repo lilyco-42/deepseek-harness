@@ -66,6 +66,13 @@ describe('Agent.cancel()', () => {
       if (typeof agent.cancelActiveTurn !== 'function') throw new Error('Agent does not support turn-scoped cancellation')
       const cancelTurn = (turn: number) => agent.cancelActiveTurn?.(turn, { kind: 'user' }, { keepInbox: true }) ?? false
       const scopedResults: boolean[] = []
+      ctx.on('agent/pre-step', ({ turn, messages }, next) => {
+        if (turn === 1) messages.push(createUserMessage({
+          content: [{ type: 'text', text: 'admission context' }],
+          source: { kind: 'user' },
+        }))
+        return next()
+      })
       ctx.on('agent/request', ({ turn }, next) => {
         if (turn === 1) scopedResults.push(cancelTurn(1))
         if (turn === 2) scopedResults.push(cancelTurn(1))

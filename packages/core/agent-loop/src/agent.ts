@@ -53,6 +53,8 @@ type Phase =
     activeTurn: number | undefined
     step: number
     wakeRequested: boolean
+    keepClaimedInputOnCancel: boolean
+    claimedInput: UserMessage[]
   }
 
 type StepEndReason = Extract<TurnEndReason, { kind: 'completed' | 'max-tokens' }>
@@ -183,7 +185,12 @@ export class ReactLoopAgent implements Agent {
       this.inbox.clear()
       if (this.phase.kind !== 'idle') this.phase.wakeRequested = false
     }
-    if (this.phase.kind !== 'idle') this.phase.abort.abort(cause)
+    if (this.phase.kind !== 'idle') {
+      if (this.phase.kind === 'running' && !this.phase.abort.signal.aborted) {
+        this.phase.keepClaimedInputOnCancel = options.keepInbox === true
+      }
+      this.phase.abort.abort(cause)
+    }
   }
 
   cancelActiveTurn(turn: number, cause: AgentCancelCause, options: CancelOptions = {}): boolean {
@@ -244,6 +251,8 @@ export class ReactLoopAgent implements Agent {
       activeTurn: undefined,
       step: 0,
       wakeRequested: false,
+      keepClaimedInputOnCancel: false,
+      claimedInput: [],
     })
     this.loopCtx.agents.withInitiator(this, () => this.kick()).then(driver.resolve, driver.reject)
   }
@@ -283,6 +292,8 @@ export class ReactLoopAgent implements Agent {
     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": pre-step outside running phase`)
     const signal = this.phase.abort.signal
     const claimed = this.inbox.claim(target, position.turn)
+    // Keep original inbox membership separate from the mutable pre-step proposal.
+    this.phase.claimedInput = [...claimed]
     const assembly = await this.loopCtx.systemPrompt.assemble(assembleContextFor(this, signal))
     signal.throwIfAborted()
     const sections = renderContextSections(assembly)
@@ -314,6 +325,7 @@ export class ReactLoopAgent implements Agent {
     const phase = this.phase
     const { signal } = phase.abort
     signal.throwIfAborted()
+    phase.claimedInput = []
     const turn = phase.turn + 1
     try {
       this.session.append('turn/start', { turn })
@@ -330,13 +342,18 @@ export class ReactLoopAgent implements Agent {
         const step = phase.step + 1
         const decision = await this.preStep(target, { turn, step })
         if (decision.kind === 'reject') {
+          phase.claimedInput = []
           turnEnds = { kind: 'blocked' }
           return false
         }
-        if (turnEnds && decision.messages.length === 0) break
+        if (turnEnds && decision.messages.length === 0) {
+          phase.claimedInput = []
+          break
+        }
         // A removed waking message or an enter decision rewritten to empty
         // still owns the initial turn boundary, but it spends no model call.
         if (phase.step === 0 && decision.messages.length === 0) {
+          phase.claimedInput = []
           turnEnds = { kind: 'completed' }
           return false
         }
@@ -382,6 +399,12 @@ export class ReactLoopAgent implements Agent {
       // can synchronously notify observers or a following turn can begin.
       phase.activeTurn = undefined
       try {
+        if (turnEnds?.kind === 'aborted' && phase.keepClaimedInputOnCancel) {
+          for (const message of phase.claimedInput) {
+            this.session.append('user/message', message, { surfaceOp: 'append' })
+          }
+        }
+        phase.claimedInput = []
         // oxlint-disable-next-line typescript/no-non-null-assertion -- every exit assigns a turn ending
         this.session.append('turn/end', { turn, reason: turnEnds! })
       } catch (error: unknown) {
@@ -406,18 +429,7 @@ export class ReactLoopAgent implements Agent {
     const renderedPrompt = renderPrompt(assembly)
     let firstAttempt = true
     while (true) {
-      const { config, preparedCall } = await this.prepareRequest(turn, step, signal).catch((error: unknown) => {
-        // A request can be cancelled while provider/model admission is still
-        // running. The inbox was already claimed, so retain that user input in
-        // the durable transcript even though no model request was admitted.
-        if (firstAttempt) {
-          for (const message of decision.messages) {
-            this.session.append('user/message', message, { surfaceOp: 'append' })
-          }
-          firstAttempt = false
-        }
-        throw error
-      })
+      const { config, preparedCall } = await this.prepareRequest(turn, step, signal)
       const startsRequestSeries = firstAttempt && decision.startsRequestSeries === true
       const commits = this.systemPrompt.project(renderedPrompt, {
         inHistory: preparedCall?.systemPromptUpdate === 'in-history',
@@ -432,6 +444,7 @@ export class ReactLoopAgent implements Agent {
         for (const message of decision.messages) {
           this.session.append('user/message', message, { surfaceOp: 'append' })
         }
+        if (this.phase.kind === 'running') this.phase.claimedInput = []
       }
       firstAttempt = false
       const request = this.buildRequest(config, preparedCall, assembly.tools, startsRequestSeries, signal)
