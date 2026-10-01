@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Each prompt request id is bound to a SHA-256 digest of its content, delivery mode, effective model, and optional execution-context digest. Exact retries return the original acceptance while admission is pending or after the user message is logged. Reuse with different inputs or an unverifiable legacy record returns `gateway/bad-request` (`REQUEST_ID_CONFLICT`) without enqueueing another message or changing the requested model. The optional prompt model selection is resolved and applied only for a new request; it does not change the deployment default.
+Each prompt request id is bound to a SHA-256 digest of its content, delivery mode, effective model, and optional execution-context digest. Exact retries return the original acceptance while admission is pending or after the prompt enters the durable inbox or user-message log. Removing or editing queued work retains its original request identity; retries never reinsert removed work. Reuse with different inputs or an unverifiable legacy record returns `gateway/bad-request` (`REQUEST_ID_CONFLICT`) without enqueueing another message or changing the requested model. The optional prompt model selection is resolved and applied only for a new request; it does not change the deployment default.
 
 The session model-selection operation records a validated choice for the addressed Session and, by default, saves it as the deployment default for Sessions without a logged choice. Integrations whose model is scoped outside DSH set persistDefault to false to keep that choice local to the addressed Session.
 

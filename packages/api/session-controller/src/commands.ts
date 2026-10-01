@@ -747,8 +747,12 @@ function findPromptRequest(agent: Agent, requestId: SessionRequestId): PromptReq
   }
   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
   for (const event of agent.session.snapshotEvents()) {
-    if (event.type !== 'user/message') continue
-    inspect(event.data.source)
+    if (event.type === 'user/message') {
+      inspect(event.data.source)
+    } else if (event.type === 'agent/inbox/spliced') {
+      // Removal retires queued work, not the identity of its accepted request.
+      for (const message of event.data.inserted) inspect(message.source)
+    }
   }
   return found
 }
