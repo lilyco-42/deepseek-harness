@@ -13,7 +13,7 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SessionCommandController } from '../src/commands.ts'
 import type { SessionRequestId } from '../src/types.ts'
 
@@ -580,6 +580,75 @@ describe('Session file uploads', () => {
     agent.session.append('user/message', admitted, { surfaceOp: 'append' })
 
     await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it.each(['next-turn', 'next-step'] as const)(
+    'keeps a removed %s prompt identity after pending admission memory retires',
+    async (target) => {
+      const { ctx, controller, agent, followup } = await uploadHarness()
+      onTestFinished(async () => { await ctx.fiber.dispose() })
+      const request = promptRequest([{ type: 'text', text: 'do not resurrect this request' }])
+      await controller.prompt(request)
+      const admitted = followup.mock.calls[0]?.[0] as UserMessage
+      agent.session.append('agent/inbox/spliced', { target, start: 0, inserted: [admitted] })
+      agent.inbox.append(target, admitted)
+      await controller.updateQueue({ sessionId: SESSION, itemId: admitted.id, action: { kind: 'remove' } })
+      agent.session.append('agent/inbox/spliced', {
+        target, start: 0, removedCount: 1, inserted: [], outcome: 'canceled',
+      })
+      emitTurnEnd(ctx, agent)
+
+      await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+      expect(followup).toHaveBeenCalledOnce()
+      expect(agent.inbox.nextTurn).toEqual([])
+      expect(agent.inbox.nextStep).toEqual([])
+      await expect(controller.prompt({
+        ...request, content: [{ type: 'text', text: 'changed after removal' }],
+      })).rejects.toMatchObject({
+        code: 'gateway/bad-request',
+        details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+      })
+      expect(followup).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('rejects a removed legacy queue identity without an original digest', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const request = promptRequest([{ type: 'text', text: 'legacy queued prompt' }])
+    const queued = createUserMessage({
+      content: [{ type: 'text', text: 'legacy queued prompt' }],
+      source: { kind: 'user', rpcId: request.requestId },
+    })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [queued] })
+    agent.session.append('agent/inbox/spliced', {
+      target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled',
+    })
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
+  it('rejects conflicting queue and user-message digests for one request id', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const request = promptRequest([{ type: 'text', text: 'original queued prompt' }])
+    await controller.prompt(request)
+    const admitted = followup.mock.calls[0]?.[0] as UserMessage
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [admitted] })
+    agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'conflicting prompt' }],
+      source: { kind: 'user', rpcId: request.requestId, requestDigest: 'b'.repeat(64) },
+    }), { surfaceOp: 'append' })
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
     expect(followup).toHaveBeenCalledOnce()
   })
 
