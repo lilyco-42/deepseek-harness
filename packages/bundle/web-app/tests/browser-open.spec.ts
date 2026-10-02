@@ -220,7 +220,7 @@ describe('web app browser startup', () => {
       expect(ctx.get('sessionController')).toBeDefined()
       expect(server.register).toHaveBeenCalledTimes(2)
       const routes = server.register.mock.calls.map(([route]) => route)
-      expect(routes.map((route) => route.path)).toEqual(expect.arrayContaining([
+      expect(routes.map(route => route.path)).toEqual(expect.arrayContaining([
         '/lain42/bridge/v1/turn',
         '/lain42/bridge/v1/cancel',
       ]))
