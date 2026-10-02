@@ -10,9 +10,9 @@ import {
   LAIN42_BRIDGE_PATH,
   LAIN42_CANCEL_PATH,
   signLain42BridgeRequest,
-} from '../../../../../../packages/bundle/web-app/src/lain42-bridge.ts'
-import { signLain42AgentModelRelayRequest } from '../../../../../../packages/bundle/web-app/src/lain42-model-relay.ts'
-import { decompressZstdFrame, scanZstdFrames } from '../../../../../../packages/session/session-persistence-jsonl/src/zstd.ts'
+} from '@deepseek-ai/dsh-web-app/src/lain42-bridge.ts'
+import { signLain42AgentModelRelayRequest } from '@deepseek-ai/dsh-web-app/src/lain42-model-relay.ts'
+import { decompressZstdFrame, scanZstdFrames } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
 import { withDefaultWeb } from './default-web-process.ts'
 
 const SECRET = 'keyless-lain42-cancellation-composition-secret'
@@ -53,7 +53,10 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
   test.onTestFinished(async () => {
     for (const response of responses) response.destroy()
     await new Promise<void>((resolve, reject) => {
-      modelServer.close(error => error ? reject(error) : resolve())
+      modelServer.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      })
       modelServer.closeAllConnections()
     })
     await rm(root, { recursive: true, force: true })
@@ -100,7 +103,7 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
     const original = signedPost(url, LAIN42_BRIDGE_PATH, turn, test.signal)
     await Promise.race([
       firstInference.promise,
-      original.then(reply => { throw new Error(`Original turn ended before inference: ${JSON.stringify(reply)}`) }),
+      original.then((reply) => { throw new Error(`Original turn ended before inference: ${JSON.stringify(reply)}`) }),
     ])
     expect(calls[0]?.path).toBe('/v1/agent/chat/completions')
     const headers = calls[0]!.headers
@@ -117,7 +120,7 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
     const newer = signedPost(url, LAIN42_BRIDGE_PATH, { ...turn, requestId: SECOND, text: 'Answer this newer task.' }, test.signal)
     const response = await Promise.race([
       secondInference.promise,
-      newer.then(reply => { throw new Error(`New turn ended before inference: ${JSON.stringify(reply)}`) }),
+      newer.then((reply) => { throw new Error(`New turn ended before inference: ${JSON.stringify(reply)}`) }),
     ])
     const oldStop = await signedPost(url, LAIN42_CANCEL_PATH, { version: 1, sessionId: SESSION, requestId: FIRST }, test.signal)
     expect(oldStop.body).toMatchObject({ requestId: FIRST, status: 'not-active' })
@@ -145,9 +148,11 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
       .toString('utf8')
   })))
     .flatMap(text => text.trim().split('\n').map((line): unknown => JSON.parse(line)))
-  expect(records).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'turn/end', data: expect.objectContaining({ turn: 1, reason: expect.objectContaining({ kind: 'aborted' }) }) }),
-  ]))
+  const originalEnd = records.find(record => typeof record === 'object' && record !== null
+    && 'type' in record && record.type === 'turn/end'
+    && 'data' in record && typeof record.data === 'object' && record.data !== null
+    && 'turn' in record.data && record.data.turn === 1)
+  expect(originalEnd).toMatchObject({ type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
   await withDefaultWeb(test, async ({ url }) => {
     expect(await signedPost(url, LAIN42_BRIDGE_PATH, turn, test.signal))
       .toMatchObject({ status: 502, body: { error: 'agent_turn_failed' } })
@@ -179,14 +184,14 @@ function signedPost(
         'x-lain42-nonce': nonce,
         'x-lain42-signature': signLain42BridgeRequest(secret, timestamp, nonce, bytes, path),
       },
-    }, response => {
+    }, (response) => {
       let text = ''
       response.setEncoding('utf8')
       response.on('data', (chunk: string) => { text += chunk })
       response.once('error', reject)
       response.once('end', () => {
         try { resolve({ status: response.statusCode, body: JSON.parse(text) }) }
-        catch (error) { reject(error) }
+        catch (error) { reject(error instanceof Error ? error : new Error('Invalid JSON from private bridge', { cause: error })) }
       })
     })
     pending.once('error', reject)
