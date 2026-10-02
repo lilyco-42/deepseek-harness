@@ -63,7 +63,10 @@ it('returns exact issue evidence to model continuation and replays the recorded 
   })
   test.onTestFinished(async () => {
     await new Promise<void>((resolve, reject) => {
-      upstream.close(error => error ? reject(error) : resolve())
+      upstream.close((error) => {
+        if (error) reject(error)
+        else resolve()
+      })
       upstream.closeAllConnections()
     })
     await rm(root, { recursive: true, force: true })
@@ -105,7 +108,7 @@ it('returns exact issue evidence to model continuation and replays the recorded 
   const sessionRoot = join(options.home, 'sessions')
   const logs = (await readdir(sessionRoot, { recursive: true })).filter(path => path.endsWith('.jsonl.zstd'))
   expect(logs.length).toBeGreaterThan(0)
-  const recorded = (await Promise.all(logs.map(async path => {
+  const recorded = (await Promise.all(logs.map(async (path) => {
     const bytes = await readFile(join(sessionRoot, path))
     const { frames, tornStart } = scanZstdFrames(bytes)
     expect(tornStart).toBeUndefined()
@@ -130,14 +133,14 @@ function signedTurn(baseUrl: string, value: unknown, signal: AbortSignal): Promi
       'content-type': 'application/json', 'content-length': String(bytes.length),
       'x-lain42-timestamp': timestamp, 'x-lain42-nonce': nonce,
       'x-lain42-signature': signLain42BridgeRequest(SECRET, timestamp, nonce, bytes),
-    } }, response => {
+    } }, (response) => {
       let text = ''
       response.setEncoding('utf8')
       response.on('data', (chunk: string) => { text += chunk })
       response.once('error', reject)
       response.once('end', () => {
         try { resolve({ status: response.statusCode, body: JSON.parse(text) }) }
-        catch (error) { reject(error) }
+        catch (error) { reject(error instanceof Error ? error : new Error('Invalid JSON from private bridge', { cause: error })) }
       })
     })
     pending.once('error', reject)
