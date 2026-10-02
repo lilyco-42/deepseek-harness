@@ -103,20 +103,21 @@ it('returns exact issue evidence to model continuation and replays the recorded 
     expect(modelRequests[1]).toContain('It still reproduces after a lost response.')
     expect(modelRequests[1]).toContain('closed')
     expect(modelRequests[1]).toContain(ISSUE_URL)
+    // Read while the process is still alive: disposal must not provide the barrier.
+    const sessionRoot = join(options.home, 'sessions')
+    const logs = (await readdir(sessionRoot, { recursive: true })).filter(path => path.endsWith('.jsonl.zstd'))
+    expect(logs.length).toBeGreaterThan(0)
+    const recorded = (await Promise.all(logs.map(async (path) => {
+      const bytes = await readFile(join(sessionRoot, path))
+      const { frames, tornStart } = scanZstdFrames(bytes)
+      expect(tornStart).toBeUndefined()
+      return Buffer.concat(await Promise.all(frames.map(frame => decompressZstdFrame(bytes.subarray(frame.start, frame.end))))).toString('utf8')
+    }))).join('\n')
+    expect(recorded).toContain('lain42_github_issue')
+    expect(recorded).toContain('It still reproduces after a lost response.')
+    expect(recorded).toContain(ANSWER)
   }, options)
 
-  const sessionRoot = join(options.home, 'sessions')
-  const logs = (await readdir(sessionRoot, { recursive: true })).filter(path => path.endsWith('.jsonl.zstd'))
-  expect(logs.length).toBeGreaterThan(0)
-  const recorded = (await Promise.all(logs.map(async (path) => {
-    const bytes = await readFile(join(sessionRoot, path))
-    const { frames, tornStart } = scanZstdFrames(bytes)
-    expect(tornStart).toBeUndefined()
-    return Buffer.concat(await Promise.all(frames.map(frame => decompressZstdFrame(bytes.subarray(frame.start, frame.end))))).toString('utf8')
-  }))).join('\n')
-  expect(recorded).toContain('lain42_github_issue')
-  expect(recorded).toContain('It still reproduces after a lost response.')
-  expect(recorded).toContain(ANSWER)
   await withDefaultWeb(test, async ({ url }) => {
     expect(await signedTurn(url, turn, test.signal)).toMatchObject({ status: 200, body: { requestId: REQUEST, answer: ANSWER } })
     expect(modelRequests).toHaveLength(2)

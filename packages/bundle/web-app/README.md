@@ -54,6 +54,8 @@ Most users never set these; the command-line flags feed the four settings below 
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
 
+The private Lain42 turn route acknowledges a completed answer only after the Session store's durability checkpoint succeeds. Missing persistence or a failed checkpoint returns an error rather than an answer that may disappear on immediate process loss. The checkpoint does not invoke the model again.
+
 ### LAN access and trusted hosts
 
 By default the GUI accepts connections from this machine only. A deployment that binds all network interfaces also allows browsers from the LAN, and the printed URL then includes a LAN address; `--trusted-host` adds extra hosts in either case. Host and Origin checks control reachability, while the token exchange authenticates every Host API method and WebSocket stream. The LAN addresses are sampled once at startup, so a network change later is not picked up — restart the GUI to re-advertise.

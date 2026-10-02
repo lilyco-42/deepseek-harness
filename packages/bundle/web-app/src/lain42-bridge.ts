@@ -76,7 +76,17 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
   if (secret === undefined || Buffer.byteLength(secret, 'utf8') < 32) {
     throw new Error('Lain42 bridge requires LAIN42_DSH_BRIDGE_SECRET with at least 32 UTF-8 bytes')
   }
-  const handler = createLain42BridgeHandler(sessionController, secret, (message) => {
+  const checkpoint = async (sessionId: SessionId): Promise<void> => {
+    const sessions = ctx.get('sessions')
+    const session = sessions?.get(sessionId)
+    if (sessions === undefined || session === undefined) {
+      throw new Error('Lain42 bridge cannot checkpoint an unattached session')
+    }
+    if (!await sessions.flush(session)) {
+      throw new Error('Lain42 bridge requires a persistence checkpoint listener')
+    }
+  }
+  const handler = createLain42BridgeHandler(sessionController, secret, checkpoint, (message) => {
     ctx.logger.warn(message)
   })
   ctx.effect(() => ctx.webServer.register({
@@ -140,19 +150,21 @@ export function createLain42CancellationHandler(
 /** Create the authenticated handler used by the route and its wire tests.
  * @param sessionController DSH service that creates, prompts, and follows sessions.
  * @param secret Shared HMAC secret used to authenticate each request.
+ * @param checkpoint Persists the completed Session before acknowledging its answer; rejection fails the request.
  * @param logWarning Receives safe diagnostics without request content or secrets.
  * @returns A web route handler for the private turn endpoint.
  */
 export function createLain42BridgeHandler(
   sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>,
   secret: string,
+  checkpoint: (sessionId: SessionId) => Promise<void>,
   logWarning: (message: string) => void,
 ): WebRoute['handler'] {
   if (Buffer.byteLength(secret, 'utf8') < 32) {
     throw new Error('Lain42 bridge secret must contain at least 32 UTF-8 bytes')
   }
   const nonces = new Map<string, number>()
-  return (request, response) => handleTurn(request, response, sessionController, secret, nonces, logWarning)
+  return (request, response) => handleTurn(request, response, sessionController, secret, nonces, checkpoint, logWarning)
 }
 
 /** Verify a signed request, run the selected web-safe Session preset, and return its final text. */
@@ -162,6 +174,7 @@ async function handleTurn(
   sessionController: Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>,
   secret: string,
   nonces: Map<string, number>,
+  checkpoint: (sessionId: SessionId) => Promise<void>,
   logWarning: (message: string) => void,
 ): Promise<void> {
   const bytes = await readSignedBody(request, response, secret, nonces, LAIN42_BRIDGE_PATH, BODY_LIMIT_BYTES)
@@ -212,6 +225,10 @@ async function handleTurn(
       })
       return
     }
+    // Live follow events can precede the persistence batching deadline. A 200
+    // must survive immediate process loss without losing this paid answer.
+    await checkpoint(sessionId)
+    controller.signal.throwIfAborted()
     writeJson(response, 200, { version: 1, requestId: turnRequest.requestId, answer: result.answer })
   } catch (error) {
     const timedOut = controller.signal.reason === timeoutReason

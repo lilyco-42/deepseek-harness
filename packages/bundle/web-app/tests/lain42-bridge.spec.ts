@@ -137,7 +137,11 @@ describe('Lain42 private DSH bridge', () => {
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
       cancel: vi.fn(() => ({ accepted: true as const })),
     } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>
-    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const checkpoint = vi.fn(async (sessionId: SessionId) => {
+      expect(sessionId).toBe(SESSION_ID)
+      calls.push('checkpoint')
+    })
+    const handler = createLain42BridgeHandler(sessionController, SECRET, checkpoint, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
       version: 1,
@@ -159,7 +163,7 @@ describe('Lain42 private DSH bridge', () => {
       answer: 'DeepSeek is an AI company and model family.',
     })
     expect(sessionController.cancel).not.toHaveBeenCalled()
-    expect(calls).toEqual(['create', 'prompt'])
+    expect(calls).toEqual(['create', 'prompt', 'checkpoint'])
     expect(sessionController.follow).toHaveBeenCalledWith(
       { address: { kind: 'session', sessionId: SESSION_ID }, maxMessages: 50 },
       expect.any(AbortSignal),
@@ -169,6 +173,55 @@ describe('Lain42 private DSH bridge', () => {
     expect(replay.status).toBe(401)
     expect(sessionController.prompt).toHaveBeenCalledTimes(1)
   })
+
+  it.each(['missing-store', 'missing-session', 'missing-persistence', 'failed', 'committed'] as const)(
+    'acknowledges a registered turn only with a committed checkpoint: %s', async (outcome) => {
+      const ctx = new Context()
+      const routes: WebRoute[] = []
+      ctx.provide('webServer', { register: (route: WebRoute) => {
+        routes.push(route)
+        return () => {}
+      } } as never)
+      const sessionController = inactiveSessionController()
+      sessionController.follow = vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents())
+      ctx.provide('sessionController', sessionController as never)
+      const session = { id: SESSION_ID }
+      const flush = vi.fn(async () => {
+        if (outcome === 'failed') throw new Error('private disk failure detail')
+        return outcome !== 'missing-persistence'
+      })
+      if (outcome !== 'missing-store') {
+        ctx.provide('sessions', {
+          get: () => outcome === 'missing-session' ? undefined : session,
+          flush,
+        } as never)
+      }
+      const warning = vi.spyOn(ctx.logger, 'warn')
+      const plugin = ctx.plugin((bridgeCtx: Context) => { registerLain42Bridge(bridgeCtx, SECRET) })
+      await plugin
+      try {
+        const route = routes.find(value => value.path === LAIN42_BRIDGE_PATH)!
+        const baseUrl = await listen(route.handler)
+        const result = await post(baseUrl, jsonBody(validRequest()))
+        expect(result.status).toBe(outcome === 'committed' ? 200 : 502)
+        const body = await result.json()
+        expect(body).toEqual(outcome === 'committed'
+          ? { version: 1, requestId: REQUEST_ID, answer: 'DeepSeek is an AI company and model family.' }
+          : { error: 'agent_turn_failed' })
+        if (outcome === 'missing-store' || outcome === 'missing-session') {
+          expect(flush).not.toHaveBeenCalled()
+        } else {
+          expect(flush).toHaveBeenCalledOnce()
+          expect(flush).toHaveBeenCalledWith(session)
+        }
+        if (outcome !== 'committed') {
+          expect(warning).toHaveBeenCalledWith('Lain42 bridge agent_turn_failed (Error)')
+        }
+      } finally {
+        await plugin.dispose()
+      }
+    },
+  )
 
   it('admits bounded v2 image content through the authenticated Session prompt', async () => {
     const sessionController = {
@@ -194,7 +247,7 @@ describe('Lain42 private DSH bridge', () => {
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
       cancel: vi.fn(() => ({ accepted: true as const })),
     } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>
-    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from(JSON.stringify({
       version: 2,
@@ -224,7 +277,7 @@ describe('Lain42 private DSH bridge', () => {
       accepted: true as const,
     }))
     const sessionController = { ...inactiveSessionController(), prompt }
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const body = jsonBody({
       version: 2,
       sessionId: SESSION_ID,
@@ -255,7 +308,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('rejects malformed or legacy-version image payloads before creating a Session', async () => {
     const sessionController = inactiveSessionController()
-    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler)
     const invalid = [
       { version: 1, images: [{ mediaType: 'image/png', data: 'AA==' }] },
@@ -313,7 +366,7 @@ describe('Lain42 private DSH bridge', () => {
       follow: vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents()),
       cancel: vi.fn(() => ({ accepted: true as const })),
     } satisfies Pick<SessionController, 'create' | 'prompt' | 'follow' | 'cancel'>
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
 
     const response = await post(baseUrl, jsonBody(validRequest()))
 
@@ -325,7 +378,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('rejects bad signatures and signed requests with extra fields before creating a Session', async () => {
     const sessionController = inactiveSessionController()
-    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler)
     const timestamp = String(Math.floor(Date.now() / 1000))
     const nonce = 'abcdef0123456789abcdef0123456789'
@@ -351,7 +404,7 @@ describe('Lain42 private DSH bridge', () => {
   })
 
   it('rejects weak shared secrets at configuration time', () => {
-    expect(() => createLain42BridgeHandler(inactiveSessionController(), 'short', vi.fn()))
+    expect(() => createLain42BridgeHandler(inactiveSessionController(), 'short', async () => {}, vi.fn()))
       .toThrow('at least 32 UTF-8 bytes')
   })
 
@@ -372,7 +425,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('returns safe method and content-type errors before reading or creating a Session', async () => {
     const sessionController = inactiveSessionController()
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
 
     const method = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`)
     expect(method.status).toBe(405)
@@ -389,7 +442,7 @@ describe('Lain42 private DSH bridge', () => {
   })
 
   it('bounds declared and streamed bodies and maps stream failures to invalid requests', async () => {
-    const handler = createLain42BridgeHandler(inactiveSessionController(), SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(inactiveSessionController(), SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler)
     const declaredOversize = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, {
       method: 'POST',
@@ -429,7 +482,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('defaults to the general preset and accepts string stream chunks with exact UTF-8 bytes', async () => {
     const sessionController = inactiveSessionController()
-    const handler = createLain42BridgeHandler(sessionController, SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler, (request) => { request.setEncoding('utf8') })
     const body = Buffer.from(JSON.stringify({ ...validRequest(), text: '你好' }))
     const response = await post(baseUrl, body)
@@ -447,7 +500,7 @@ describe('Lain42 private DSH bridge', () => {
     ['content', 'lain42-web-content'],
   ] as const)('selects the fixed %s preset', async (mode, agentPreset) => {
     const sessionController = inactiveSessionController()
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const response = await post(baseUrl, jsonBody({ ...validRequest(), mode }))
 
     expect(response.status).toBe(200)
@@ -456,7 +509,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('rejects missing, malformed, expired, replayed, and mismatched signatures', async () => {
     const sessionController = inactiveSessionController()
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const body = Buffer.from('{}')
     const timestamp = currentTimestamp()
     const nonce = nextNonce()
@@ -489,7 +542,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('rejects a repeated header value rather than choosing one value', async () => {
     const body = Buffer.from('{}')
-    const handler = createLain42BridgeHandler(inactiveSessionController(), SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(inactiveSessionController(), SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler, (request) => {
       request.headers['x-lain42-timestamp'] = [currentTimestamp(), currentTimestamp()]
     })
@@ -501,7 +554,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('expires old nonces before accepting a fresh request', async () => {
     const start = Date.now()
-    const handler = createLain42BridgeHandler(inactiveSessionController(), SECRET, vi.fn())
+    const handler = createLain42BridgeHandler(inactiveSessionController(), SECRET, async () => {}, vi.fn())
     const baseUrl = await listen(handler)
     const body = Buffer.from('{}')
     try {
@@ -514,7 +567,7 @@ describe('Lain42 private DSH bridge', () => {
   })
 
   it('caps retained nonces at the configured request bound', async () => {
-    const baseUrl = await listen(createLain42BridgeHandler(inactiveSessionController(), SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(inactiveSessionController(), SECRET, async () => {}, vi.fn()))
     const body = Buffer.from('{}')
     const timestamp = currentTimestamp()
     for (let index = 0; index < 10_000; index += 1) {
@@ -534,7 +587,7 @@ describe('Lain42 private DSH bridge', () => {
 
   it('rejects malformed JSON, non-object bodies, unknown keys, and invalid request fields', async () => {
     const sessionController = inactiveSessionController()
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const valid = validRequest()
     const missingModel = { ...valid }
     delete missingModel.model
@@ -584,7 +637,7 @@ describe('Lain42 private DSH bridge', () => {
       assistantStreamFrame(),
       snapshotFrame(events),
     ]))
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const response = await post(baseUrl, jsonBody(validRequest()))
 
     expect(response.status).toBe(200)
@@ -605,7 +658,7 @@ describe('Lain42 private DSH bridge', () => {
       ? [snapshotFrame(events)]
       : events.map((event): SessionFollowFrame => ({ type: 'event', event }))))
     const warning = vi.fn()
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, warning))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, warning))
     const response = await post(baseUrl, jsonBody(validRequest()))
     expect(response.status).toBe(502)
     expect(await response.json()).toEqual({ error: 'agent_turn_failed' })
@@ -621,7 +674,7 @@ describe('Lain42 private DSH bridge', () => {
       wireFrame('turn/end', { turn: 7, reason: { kind: 'aborted' } }),
     ]))
     const warning = vi.fn()
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, warning))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, warning))
     const response = await post(baseUrl, jsonBody(validRequest()))
     expect(response.status).toBe(502)
     expect(await response.json()).toEqual({ error: 'agent_turn_failed' })
@@ -646,7 +699,7 @@ describe('Lain42 private DSH bridge', () => {
       wireFrame('assistant/message', { turn: 5, message: { content: [{ type: 'text', text: 'Requested answer.' }] } }),
       wireFrame('turn/end', { turn: 5, reason: { kind: 'completed' } }),
     ]))
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const response = await post(baseUrl, jsonBody(validRequest()))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ answer: 'Requested answer.' })
@@ -669,7 +722,7 @@ describe('Lain42 private DSH bridge', () => {
       wireFrame('assistant/message', { turn: 1, message: { content: [] } }),
       wireFrame('turn/end', { turn: 1, reason: null }),
     ]))
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const response = await post(baseUrl, jsonBody(validRequest()))
 
     expect(response.status).toBe(502)
@@ -683,7 +736,7 @@ describe('Lain42 private DSH bridge', () => {
       wireFrame('user/message', { source: { kind: 'user', rpcId: REQUEST_ID } }),
       wireFrame('turn/end', { turn: 3, reason: { kind: 'failed' } }),
     ]))
-    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, async () => {}, vi.fn()))
     const response = await post(baseUrl, jsonBody(validRequest()))
 
     expect(response.status).toBe(502)
@@ -694,7 +747,7 @@ describe('Lain42 private DSH bridge', () => {
       wireFrame('user/message', { source: { kind: 'user', rpcId: REQUEST_ID } }),
       wireFrame('turn/end', { turn: 4, reason: { kind: 'completed' } }),
     ]))
-    const completedUrl = await listen(createLain42BridgeHandler(completedWithoutAnswer, SECRET, vi.fn()))
+    const completedUrl = await listen(createLain42BridgeHandler(completedWithoutAnswer, SECRET, async () => {}, vi.fn()))
     const completed = await post(completedUrl, jsonBody(validRequest()))
     expect(completed.status).toBe(502)
     expect(await completed.json()).toEqual({ error: 'agent_turn_failed' })
@@ -704,7 +757,7 @@ describe('Lain42 private DSH bridge', () => {
     const warning = vi.fn()
     const rejectedController = inactiveSessionController()
     rejectedController.create = vi.fn(async () => { throw new Error('private upstream detail') })
-    const rejectedUrl = await listen(createLain42BridgeHandler(rejectedController, SECRET, warning))
+    const rejectedUrl = await listen(createLain42BridgeHandler(rejectedController, SECRET, async () => {}, warning))
     const rejected = await post(rejectedUrl, jsonBody(validRequest()))
     expect(rejected.status).toBe(502)
     expect(await rejected.json()).toEqual({ error: 'agent_turn_failed' })
@@ -715,7 +768,7 @@ describe('Lain42 private DSH bridge', () => {
     nonErrorController.create = vi.fn(async () => {
       throw { reason: 'private upstream detail' }
     })
-    const nonErrorUrl = await listen(createLain42BridgeHandler(nonErrorController, SECRET, nonErrorWarning))
+    const nonErrorUrl = await listen(createLain42BridgeHandler(nonErrorController, SECRET, async () => {}, nonErrorWarning))
     const nonError = await post(nonErrorUrl, jsonBody(validRequest()))
     expect(nonError.status).toBe(502)
     expect(nonErrorWarning).toHaveBeenCalledWith('Lain42 bridge agent_turn_failed (unknown)')
@@ -744,7 +797,7 @@ describe('Lain42 private DSH bridge', () => {
       })
     })
     const timeoutWarning = vi.fn()
-    const timeoutUrl = await listen(createLain42BridgeHandler(timeoutController, SECRET, timeoutWarning))
+    const timeoutUrl = await listen(createLain42BridgeHandler(timeoutController, SECRET, async () => {}, timeoutWarning))
     const timedOut = await post(timeoutUrl, jsonBody(validRequest()))
     expect(timedOut.status).toBe(504)
     expect(await timedOut.json()).toEqual({ error: 'agent_turn_timeout' })
@@ -770,7 +823,7 @@ describe('Lain42 private DSH bridge', () => {
       })
       cancellationFailureController.cancel = vi.fn(() => { throw cancelError })
       const cancellationFailureUrl = await listen(
-        createLain42BridgeHandler(cancellationFailureController, SECRET, cancellationWarning),
+        createLain42BridgeHandler(cancellationFailureController, SECRET, async () => {}, cancellationWarning),
       )
       const cancellationFailure = await post(cancellationFailureUrl, jsonBody(validRequest()))
       expect(cancellationFailure.status).toBe(504)
@@ -790,7 +843,7 @@ describe('Lain42 private DSH bridge', () => {
       })
     })
     const unknownTurnUrl = await listen(
-      createLain42BridgeHandler(unknownTurnController, SECRET, unknownTurnWarning),
+      createLain42BridgeHandler(unknownTurnController, SECRET, async () => {}, unknownTurnWarning),
     )
     const unknownTurn = await post(unknownTurnUrl, jsonBody(validRequest()))
     expect(unknownTurn.status).toBe(504)

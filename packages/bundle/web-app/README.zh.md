@@ -54,6 +54,8 @@ dsh --profile web --no-open --port 8080
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
+Lain42 私有对话路由仅在 Session store 的持久化检查点成功后确认完整答案。缺少持久化服务或检查点失败时返回错误，避免确认可能在进程立即退出后丢失的答案。检查点不会再次调用模型。
+
 ### LAN 访问与可信主机
 
 默认情况下 GUI 只接受本机的连接。绑定所有网络接口的部署也会允许 LAN 内的浏览器访问，此时打印的 URL 会附带一个 LAN 地址；`--trusted-host` 在两种情况下都能添加额外主机。Host 与 Origin 检查控制可达性，token 交换则认证每个 Host API 方法与 WebSocket 流。LAN 地址只在启动时采样一次，因此之后的网络变化不会被感知——重启 GUI 以重新公告。
