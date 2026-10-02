@@ -73,8 +73,9 @@ describe('Lain42 private DSH bridge', () => {
       headers: signedHeaders(jsonBody(valid), currentTimestamp(), nextNonce()), body: Uint8Array.from(jsonBody(valid)) })
     expect(turnSigned.status).toBe(401)
     await turnSigned.arrayBuffer()
-    for (const value of [null, { ...valid, turn: 99 }, { ...valid, version: 2 }, { ...valid, sessionId: 'bad' },
-      { ...valid, requestId: 'bad' }, { ...valid, extra: 'x'.repeat(5000) }]) {
+    for (const value of [null, { ...valid, turn: 99 }, { ...valid, version: 2 },
+      { ...valid, sessionId: 1 }, { ...valid, sessionId: 'bad' },
+      { ...valid, requestId: 1 }, { ...valid, requestId: 'bad' }, { ...valid, extra: 'x'.repeat(5000) }]) {
       const body = jsonBody(value)
       const timestamp = currentTimestamp()
       const nonce = nextNonce()
@@ -748,7 +749,8 @@ describe('Lain42 private DSH bridge', () => {
     ctx.provide('webServer', { register: registration } as never)
     const sessionController = inactiveSessionController()
     sessionController.create = vi.fn(async () => { throw new Error('secret detail') })
-    ctx.provide('sessionController', sessionController as never)
+    const cancelPrompt = vi.fn(async () => { throw new Error('private cancellation detail') })
+    ctx.provide('sessionController', { ...sessionController, cancelPrompt } as never)
     const warning = vi.spyOn(ctx.logger, 'warn')
     const plugin = ctx.plugin((bridgeCtx: Context) => { registerLain42Bridge(bridgeCtx, SECRET) })
     await plugin
@@ -761,6 +763,23 @@ describe('Lain42 private DSH bridge', () => {
     const response = await post(baseUrl, jsonBody(validRequest()))
     expect(response.status).toBe(502)
     expect(warning).toHaveBeenCalledWith('Lain42 bridge agent_turn_failed (Error)')
+    const cancellationRoute = routes.find(value => value.path === LAIN42_CANCEL_PATH)
+    const cancellationUrl = await listen(cancellationRoute!.handler)
+    const body = jsonBody({ version: 1, sessionId: SESSION_ID, requestId: REQUEST_ID })
+    const timestamp = currentTimestamp()
+    const nonce = nextNonce()
+    const cancellation = await fetch(`${cancellationUrl}${LAIN42_CANCEL_PATH}`, {
+      method: 'POST',
+      headers: {
+        ...signedHeaders(body, timestamp, nonce),
+        'x-lain42-signature': signLain42BridgeRequest(SECRET, timestamp, nonce, body, LAIN42_CANCEL_PATH),
+      },
+      body: Uint8Array.from(body),
+    })
+    expect(cancellation.status).toBe(502)
+    expect(await cancellation.json()).toEqual({ error: 'agent_cancellation_unavailable' })
+    expect(cancelPrompt).toHaveBeenCalledWith({ sessionId: SESSION_ID, requestId: REQUEST_ID })
+    expect(warning).toHaveBeenCalledWith('Lain42 bridge cancellation unavailable (Error)')
     await plugin.dispose()
     expect(disposals).toHaveBeenCalledTimes(2)
   })
