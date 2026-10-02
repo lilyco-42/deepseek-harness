@@ -653,7 +653,7 @@ export class SessionCommandController {
     if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
       throw apiSessionSubagentOwnershipError(request.sessionId)
     }
-    return this.agents.serializeRequestAdmission<SessionCancelPromptValue>(agent, async () => {
+    return this.agents.serializeRequestAdmission<SessionCancelPromptValue>(agent, () => {
       const queued = [...agent.inbox.nextTurn, ...agent.inbox.nextStep]
         .find(message => isPromptRequestSource(message.source, request.requestId))
       if (queued !== undefined) {

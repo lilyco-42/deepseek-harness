@@ -364,10 +364,10 @@ export class ApiSessionAgentController {
   /**
    * Serialize model selection and prompt admission for one Agent.
    * @param agent - live Agent that owns the serialization chain.
-   * @param operation - asynchronous operation admitted after prior work settles.
+   * @param operation - operation admitted after prior work settles; may complete synchronously.
    * @returns the operation result or rejection.
    */
-  serializeRequestAdmission<Value>(agent: Agent, operation: () => Promise<Value>): Promise<Value> {
+  serializeRequestAdmission<Value>(agent: Agent, operation: () => Value | Promise<Value>): Promise<Value> {
     const result = (this.requestAdmissionChains.get(agent) ?? Promise.resolve()).then(operation)
     this.requestAdmissionChains.set(agent, result.then(() => undefined, () => undefined))
     return result

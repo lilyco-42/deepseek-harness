@@ -123,7 +123,7 @@ async function commandHarness(
     presetForSession: () => { throw new Error('Unexpected presetForSession call in queue attachment test') },
     selectForNextRequest: () => { throw new Error('Unexpected selectForNextRequest call in queue attachment test') },
     selectionFor: () => selection,
-    serializeRequestAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
+    serializeRequestAdmission: <Value>(_agent: Agent, operation: () => Value | Promise<Value>) => Promise.resolve(operation()),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
   }
   return {
@@ -393,7 +393,8 @@ describe('prompt-identity cancellation', () => {
   it.each(['next-turn', 'next-step'] as const)('removes only the matching %s prompt', async (target) => {
     const { ctx, controller, agent, inbox, cancel, cancelActiveTurn } = await commandHarness()
     onTestFinished(() => ctx.fiber.dispose())
-    ctx.provide('fileUploads', { retirePrompt: vi.fn() } as never)
+    const retirePrompt = vi.fn()
+    ctx.provide('fileUploads', { retirePrompt } as never)
     const owned = promptMessage()
     const unrelated = createUserMessage({ content: [], source: { kind: 'user' } })
     const context = createUserMessage({ content: [], source: { kind: 'test' } })
@@ -403,7 +404,7 @@ describe('prompt-identity cancellation', () => {
     expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
       .toEqual({ accepted: true, status: 'removed' })
     expect(target === 'next-turn' ? inbox.nextTurn : inbox.nextStep).toEqual([unrelated, context])
-    expect(ctx.fileUploads.retirePrompt).toHaveBeenCalledWith(agent, requestId)
+    expect(retirePrompt).toHaveBeenCalledWith(agent, requestId)
     expect(cancel).not.toHaveBeenCalled()
     expect(cancelActiveTurn).not.toHaveBeenCalled()
   })
