@@ -591,6 +591,44 @@ describe('Lain42 private DSH bridge', () => {
     expect(await response.json()).toMatchObject({ answer: 'AB' })
   })
 
+  it.each(['live', 'snapshot'] as const)('settles a canceled queued request from its durable %s Inbox mutation', async (delivery) => {
+    const events = [
+      wireEvent('turn/start', 1, { turn: 1 }),
+      wireEvent('agent/inbox/spliced', 2, {
+        target: 'next-turn', start: 0, removedCount: 0,
+        inserted: [{ source: { kind: 'user', rpcId: 'another-request' } }, { source: { kind: 'user', rpcId: REQUEST_ID } }],
+      }),
+      wireEvent('agent/inbox/spliced', 3, { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' }),
+      wireEvent('agent/inbox/spliced', 4, { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' }),
+    ]
+    const sessionController = inactiveSessionController(() => frames(delivery === 'snapshot'
+      ? [snapshotFrame(events)]
+      : events.map((event): SessionFollowFrame => ({ type: 'event', event }))))
+    const warning = vi.fn()
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, warning))
+    const response = await post(baseUrl, jsonBody(validRequest()))
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({ error: 'agent_turn_failed' })
+    expect(sessionController.cancel).not.toHaveBeenCalled()
+    expect(warning).not.toHaveBeenCalled()
+  })
+
+  it('observes an aborted exact Inbox claim before its first user-message event', async () => {
+    const sessionController = inactiveSessionController(() => frames([
+      wireFrame('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 0, inserted: [{ source: { kind: 'user', rpcId: REQUEST_ID } }] }),
+      wireFrame('turn/start', { turn: 7 }),
+      wireFrame('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] }),
+      wireFrame('turn/end', { turn: 7, reason: { kind: 'aborted' } }),
+    ]))
+    const warning = vi.fn()
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, warning))
+    const response = await post(baseUrl, jsonBody(validRequest()))
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({ error: 'agent_turn_failed' })
+    expect(sessionController.cancel).not.toHaveBeenCalled()
+    expect(warning).not.toHaveBeenCalled()
+  })
+
   it('returns unavailable when no matching user turn is present', async () => {
     const sessionController = inactiveSessionController(() => frames([
       assistantStreamFrame(),
