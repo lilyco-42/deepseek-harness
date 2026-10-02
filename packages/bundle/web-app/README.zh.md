@@ -70,6 +70,8 @@ dsh --profile web --no-open --port 8080
 
 ### Lain42 私有控制面接口
 
+账号工具 `lain42_github_issue` 通过 New API 按仓库和编号读取指定 Issue，包括已关闭 Issue。它返回最多 12 KiB 的正文及最多三条最早评论（每条 2 KiB），并标明截断和评论读取失败。浏览器预读与模型选择的详情读取共用同一个 New API 读取器。OAuth token 留在 New API，DSH 只收到读取的内容；该工具不读取仓库源码，也不发布 Issue 回复或修改代码。
+
 `enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本，以及由 New API 选择的必填模型 ID；`general`、`coding`、`research`、`content` 模式可以省略，省略时使用 `general`。缺少模型 ID 的请求会被拒绝，不会回退到 DSH 进程级默认模型。v2 请求还可以携带最多 4 张 PNG、JPEG、WebP 或 GIF 图片，解码后合计不超过 8 MiB；图片会先通过 DSH 现有的附件校验，再进入模型请求。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，不支持流式传输或任意二进制附件。
 
 同一选项还会注册 `POST /lain42/bridge/v1/cancel`。其独立签名的 JSON 请求体最多为 4096 字节，只包含版本 `1`、原始会话 ID 和请求 ID；对话路由的签名不能授权取消操作。该路由调用 `sessionController.cancelPrompt`，并在回执中保留原始身份。`removed` 表示已移除排队输入；`cancellation-requested` 标识一个仍须观察终态事件的活动轮次。回执不证明任务已进入终态。对话等待器重放已提交的 Inbox 变更：自身排队请求被取消后立即结束观察，不等待不存在的轮次；请求被确切领取后，会在首条用户消息出现前确定所属轮次。`not-found` 不会为未来输入预留身份或取消未来输入；控制面负责保存取消意图并协调接收过程。仅有网络断开不会取消工作。
