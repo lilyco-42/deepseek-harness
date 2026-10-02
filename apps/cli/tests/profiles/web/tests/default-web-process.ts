@@ -28,6 +28,7 @@ interface WebProcessOptions {
   env?: NodeJS.ProcessEnv
   home?: string
   cwd?: string
+  onMessage?: (message: unknown) => void
 }
 
 /**
@@ -110,6 +111,7 @@ export async function withDefaultWeb(
     })
     child.once('disconnect', () => { rejectPending(new Error(`Web IPC disconnected\n${stdout}\n${stderr}`)) })
     child.on('message', (message: { command?: string; roster?: RuntimeRoster; error?: string }) => {
+      options.onMessage?.(message)
       if (message.command === undefined) return
       const request = pending.get(message.command)
       if (request === undefined) return

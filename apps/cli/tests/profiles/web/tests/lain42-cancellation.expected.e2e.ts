@@ -5,6 +5,8 @@ import { createServer, request } from 'node:http'
 import type { ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import ts from 'typescript'
 import { expect, it } from 'vitest'
 import {
   LAIN42_BRIDGE_PATH,
@@ -19,13 +21,15 @@ const SECRET = 'keyless-lain42-cancellation-composition-secret'
 const SESSION = 'a'.repeat(64)
 const FIRST = '11111111-1111-4111-8111-111111111111'
 const SECOND = '22222222-2222-4222-8222-222222222222'
+const QUEUED = '33333333-3333-4333-8333-333333333333'
 const MODEL = 'composition-model'
 
-it('settles an original Stop, protects a newer turn and never re-executes it after process restart', async (test) => {
+it('settles queued and active Stops, protects a newer turn and never re-executes stopped work after process restart', async (test) => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-lain42-stop-composition-'))
   const firstInference = Promise.withResolvers<undefined>()
   const firstClosed = Promise.withResolvers<undefined>()
   const secondInference = Promise.withResolvers<ServerResponse>()
+  const queuedAdmission = Promise.withResolvers<undefined>()
   const calls: Array<{ path: string | undefined; headers: Record<string, string | string[] | undefined>; body: unknown }> = []
   const responses: ServerResponse[] = []
   // Only the external model HTTP service is replaced. The real pi-ai adapter,
@@ -68,7 +72,13 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
   const address = modelServer.address()
   if (address === null || typeof address === 'string') throw new Error('Model server did not bind')
   const patch = join(root, 'lain42-test.patch.yml')
+  const observer = join(root, 'prompt-inbox-observer.js')
+  const observerSource = await readFile(new URL('fixtures/prompt-inbox-observer.ts', import.meta.url), 'utf8')
+  await writeFile(observer, ts.transpileModule(observerSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText)
   await writeFile(patch, JSON.stringify([
+    { insert: [{ id: 'prompt-inbox-observer', name: pathToFileURL(observer).href, config: { sessionId: SESSION, requestId: QUEUED } }] },
     { id: 'web-runtime', config: { openBrowser: false, printUrl: true, surfaceContext: true, enableLain42Bridge: true } },
     // Automatic title inference is independent of prompt cancellation.
     { id: 'session-title-llm', disabled: true },
@@ -86,6 +96,12 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
     patches: [patch],
     home: join(root, 'home'),
     cwd: root,
+    onMessage: (message: unknown) => {
+      if (typeof message === 'object' && message !== null && 'command' in message && message.command === 'prompt-queued'
+        && 'sessionId' in message && message.sessionId === SESSION && 'requestId' in message && message.requestId === QUEUED) {
+        queuedAdmission.resolve(undefined)
+      }
+    },
     env: {
       LAIN42_DSH_BRIDGE_SECRET: SECRET,
       LAIN42_AGENT_MODEL_RELAY_SECRET: SECRET,
@@ -111,6 +127,20 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
     expect(headers['x-lain42-signature']).toBe(signLain42AgentModelRelayRequest(
       SECRET, String(headers['x-lain42-timestamp']), String(headers['x-lain42-nonce']), SESSION, MODEL,
     ))
+    const queuedTurn = { ...turn, requestId: QUEUED, text: 'This queued task must never infer.' }
+    const queued = signedPost(url, LAIN42_BRIDGE_PATH, queuedTurn, test.signal)
+    await Promise.race([
+      queuedAdmission.promise,
+      queued.then((reply) => { throw new Error(`Queued turn ended before admission: ${JSON.stringify(reply)}`) }),
+    ])
+    expect(await signedPost(url, LAIN42_CANCEL_PATH, { version: 1, sessionId: SESSION, requestId: QUEUED }, test.signal))
+      .toMatchObject({ status: 200, body: { requestId: QUEUED, status: 'removed' } })
+    expect(await queued).toMatchObject({ status: 502, body: { error: 'agent_turn_failed' } })
+    expect(calls).toHaveLength(1)
+    expect(responses[0]?.destroyed).toBe(false)
+    expect(await signedPost(url, LAIN42_BRIDGE_PATH, queuedTurn, test.signal))
+      .toMatchObject({ status: 502, body: { error: 'agent_turn_failed' } })
+    expect(calls).toHaveLength(1)
     const canceled = await signedPost(url, LAIN42_CANCEL_PATH, { version: 1, sessionId: SESSION, requestId: FIRST }, test.signal)
     expect(canceled.status).toBe(200)
     expect(canceled.body).toMatchObject({ version: 1, sessionId: SESSION, requestId: FIRST, status: 'cancellation-requested', turn: 1 })
@@ -154,6 +184,8 @@ it('settles an original Stop, protects a newer turn and never re-executes it aft
     && 'turn' in record.data && record.data.turn === 1)
   expect(originalEnd).toMatchObject({ type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted' } } })
   await withDefaultWeb(test, async ({ url }) => {
+    expect(await signedPost(url, LAIN42_BRIDGE_PATH, { ...turn, requestId: QUEUED, text: 'This queued task must never infer.' }, test.signal))
+      .toMatchObject({ status: 502, body: { error: 'agent_turn_failed' } })
     expect(await signedPost(url, LAIN42_BRIDGE_PATH, turn, test.signal))
       .toMatchObject({ status: 502, body: { error: 'agent_turn_failed' } })
     expect(calls).toHaveLength(2)
