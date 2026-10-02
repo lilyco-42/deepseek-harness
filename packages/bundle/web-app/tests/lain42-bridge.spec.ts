@@ -99,18 +99,18 @@ describe('Lain42 private DSH bridge', () => {
 
   it.each([new Error('private token material'), 'private token material'])(
     'does not expose private cancellation errors or convert unavailable delivery into settlement (%s)', async (failure) => {
-    const warning = vi.fn()
-    const cancelPrompt = vi.fn(async () => { throw failure })
-    const baseUrl = await listen(createLain42CancellationHandler({ cancelPrompt }, SECRET, warning))
-    const body = jsonBody({ version: 1, sessionId: SESSION_ID, requestId: REQUEST_ID })
-    const timestamp = currentTimestamp()
-    const nonce = nextNonce()
-    const response = await fetch(`${baseUrl}${LAIN42_CANCEL_PATH}`, { method: 'POST',
-      headers: { ...signedHeaders(body, timestamp, nonce),
-        'x-lain42-signature': signLain42BridgeRequest(SECRET, timestamp, nonce, body, LAIN42_CANCEL_PATH) }, body: Uint8Array.from(body) })
-    expect(response.status).toBe(502)
-    expect(await response.json()).toEqual({ error: 'agent_cancellation_unavailable' })
-    expect(warning).toHaveBeenCalledWith(`Lain42 bridge cancellation unavailable (${failure instanceof Error ? 'Error' : 'unknown'})`)
+      const warning = vi.fn()
+      const cancelPrompt = vi.fn(async () => { throw failure })
+      const baseUrl = await listen(createLain42CancellationHandler({ cancelPrompt }, SECRET, warning))
+      const body = jsonBody({ version: 1, sessionId: SESSION_ID, requestId: REQUEST_ID })
+      const timestamp = currentTimestamp()
+      const nonce = nextNonce()
+      const response = await fetch(`${baseUrl}${LAIN42_CANCEL_PATH}`, { method: 'POST',
+        headers: { ...signedHeaders(body, timestamp, nonce),
+          'x-lain42-signature': signLain42BridgeRequest(SECRET, timestamp, nonce, body, LAIN42_CANCEL_PATH) }, body: Uint8Array.from(body) })
+      expect(response.status).toBe(502)
+      expect(await response.json()).toEqual({ error: 'agent_cancellation_unavailable' })
+      expect(warning).toHaveBeenCalledWith(`Lain42 bridge cancellation unavailable (${failure instanceof Error ? 'Error' : 'unknown'})`)
     },
   )
   it('authenticates one bounded prompt, pins the safe preset, returns its answer, and rejects replay', async () => {
