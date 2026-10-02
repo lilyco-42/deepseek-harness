@@ -50,7 +50,7 @@ Most users never set these; the command-line flags feed the four settings below 
 | `printUrl` | `true` | Print the `dsh web:` URL line at startup |
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
-| `enableLain42Bridge` | `false` | Register the private Lain42 server-to-server turn route |
+| `enableLain42Bridge` | `false` | Register the private Lain42 server-to-server turn and cancellation routes |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -71,6 +71,8 @@ The `lain42-web`, `lain42-web-coding`, `lain42-web-research`, and `lain42-web-co
 ### Private Lain42 control-plane bridge
 
 `enableLain42Bridge` adds one `POST /lain42/bridge/v1/turn` route for the authenticated New API backend. It requires `LAIN42_DSH_BRIDGE_SECRET` (at least 32 bytes) and a matching New API server secret. Requests use a timestamped HMAC, a one-use nonce, an opaque Session id, a UUID request id, bounded text, a required model id selected by New API, and an optional mode from `general`, `coding`, `research`, or `content`. Requests without a model id are rejected; they never fall back to the DSH process-wide default. Version 2 requests can also carry up to four PNG, JPEG, WebP, or GIF images with an aggregate decoded size of at most 8 MiB. DSH admits image bytes through its normal attachment validator before the model sees them. The route maps mode to a server-owned preset and keeps the model provider fixed at `lain42-web`; it accepts no provider, directory, or command override. It returns completed assistant text and does not stream or accept arbitrary binary attachments.
+
+The same option registers `POST /lain42/bridge/v1/cancel`. Its separately signed, at-most-4096-byte JSON body contains only version `1` and the original Session and request ids; a turn-route signature cannot authorize cancellation. The route delegates to `sessionController.cancelPrompt` and returns its receipt with the original identity. `removed` means queued input was removed; `cancellation-requested` identifies an active turn whose terminal event still needs observation. A receipt never proves terminal settlement. `not-found` does not reserve or cancel a future prompt; the control plane owns cancellation intent and admission reconciliation. Transport loss alone does not cancel work.
 
 The preset also mounts `@deepseek-ai/dsh-web-app/lain42-tools`. The relay defaults to `https://api.lain42.top/api/agent/bridge/v1/tool`; set `LAIN42_AGENT_TOOL_RELAY_URL` only to override it for another environment. The DSH service signs bounded requests with the existing `LAIN42_DSH_BRIDGE_SECRET`. New API verifies the HMAC and one-use nonce, resolves the DSH Session to its stored Lain42 account owner, and executes only the named read-only search, page-fetch, repository, issue, or pull-request operation. GitHub OAuth tokens stay in New API and are selected from the resolved account; they are never sent to DSH or the browser. Public page and repository contents remain untrusted model input. If the relay URL or shared secret is invalid, tools return an actionable service-unavailable result instead of disabling ordinary chat.
 
@@ -105,7 +107,7 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff |
-| [`src/lain42-bridge.ts`](src/lain42-bridge.ts) | The private HMAC-authenticated turn route used by the Lain42 control plane |
+| [`src/lain42-bridge.ts`](src/lain42-bridge.ts) | The private HMAC-authenticated turn and original-request cancellation routes used by the Lain42 control plane |
 | [`src/lain42-tools.ts`](src/lain42-tools.ts) | Preset-scoped read-only tools relayed through New API with per-account OAuth isolation |
 | [`src/lain42-model-relay.ts`](src/lain42-model-relay.ts) | Session- and model-scoped signed headers for New API model requests |
 | [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--help` |

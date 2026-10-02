@@ -40,6 +40,7 @@ jobs:
           pnpm run gen-cordis-catalog
           pnpm run gen-doc-graphs
           pnpm run gen-persistence-catalog
+          pnpm run verify-translation-pairing --write packages/bundle/web-app/README.md
       - name: Upload generated cancellation references
         uses: actions/upload-artifact@v4
         with:
@@ -54,6 +55,7 @@ jobs:
             docs/persistence-catalog.md
             docs/persistence-catalog.zh.md
             docs/persistence-catalog.i18n.yaml
+            packages/bundle/web-app/README.i18n.yaml
           if-no-files-found: error
       - name: Build required native system dependency
         run: pnpm run build:native-system
@@ -63,6 +65,7 @@ jobs:
           packages/api/session-controller/tests/commands-queue-attachment.host.spec.ts
           packages/api/session-controller/tests/commands-queue-replay.host.spec.ts
           packages/api/session-controller/tests/controller.host.spec.ts
+          packages/bundle/web-app/tests/lain42-bridge.spec.ts
 
   # Three enterprise jobs isolate coverage, static analysis, and the
   # build-backed consumer tail. The consumer job owns the only Linux build so

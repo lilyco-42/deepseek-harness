@@ -16,6 +16,8 @@ import type {
 
 /** Exact server-only path for HMAC-authenticated Lain42 Agent turns. */
 export const LAIN42_BRIDGE_PATH = '/lain42/bridge/v1/turn'
+/** Exact server-only path for cancellation of an original prompt identity. */
+export const LAIN42_CANCEL_PATH = '/lain42/bridge/v1/cancel'
 
 const BODY_LIMIT_BYTES = 12 * 1024 * 1024
 const PROMPT_LIMIT_BYTES = 24 * 1024
@@ -82,6 +84,57 @@ export function registerLain42Bridge(ctx: Context, secret: string | undefined): 
     path: LAIN42_BRIDGE_PATH,
     handler,
   }), 'web-app: Lain42 private turn bridge')
+  const cancelHandler = createLain42CancellationHandler(sessionController, secret, (message) => {
+    ctx.logger.warn(message)
+  })
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: LAIN42_CANCEL_PATH,
+    handler: cancelHandler,
+  }), 'web-app: Lain42 private cancellation bridge')
+}
+
+/** Create a private original-request cancellation handler; a receipt is not settlement.
+ * @param sessionController DSH service that cancels one original prompt identity.
+ * @param secret Shared server-only HMAC secret.
+ * @param logWarning Receives diagnostics without request data or credentials.
+ * @returns The signed cancellation route handler.
+ */
+export function createLain42CancellationHandler(
+  sessionController: Pick<SessionController, 'cancelPrompt'>,
+  secret: string,
+  logWarning: (message: string) => void,
+): WebRoute['handler'] {
+  if (Buffer.byteLength(secret, 'utf8') < 32) {
+    throw new Error('Lain42 bridge secret must contain at least 32 UTF-8 bytes')
+  }
+  const nonces = new Map<string, number>()
+  return async (request, response) => {
+    const bytes = await readSignedBody(request, response, secret, nonces, LAIN42_CANCEL_PATH, 4096)
+    if (bytes === undefined) return
+    let record: Record<string, unknown> | undefined
+    try {
+      record = asRecord(JSON.parse(bytes.toString('utf8')))
+    } catch {
+      record = undefined
+    }
+    if (record?.version !== 1 || Object.keys(record).some(key => !['version', 'sessionId', 'requestId'].includes(key))
+      || typeof record.sessionId !== 'string' || !/^[A-Za-z0-9]{64}$/u.test(record.sessionId)
+      || typeof record.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(record.requestId)) {
+      writeJson(response, 400, { error: 'invalid_request' })
+      return
+    }
+    try {
+      const receipt = await sessionController.cancelPrompt({
+        sessionId: brandString<SessionId>(record.sessionId),
+        requestId: brandString<SessionRequestId>(record.requestId),
+      })
+      writeJson(response, 200, { version: 1, sessionId: record.sessionId, requestId: record.requestId, ...receipt })
+    } catch (error) {
+      logWarning(`Lain42 bridge cancellation unavailable (${error instanceof Error ? error.name : 'unknown'})`)
+      writeJson(response, 502, { error: 'agent_cancellation_unavailable' })
+    }
+  }
 }
 
 /** Create the authenticated handler used by the route and its wire tests.
@@ -111,30 +164,8 @@ async function handleTurn(
   nonces: Map<string, number>,
   logWarning: (message: string) => void,
 ): Promise<void> {
-  response.setHeader('cache-control', 'no-store')
-  if (request.method !== 'POST') {
-    writeJson(response, 405, { error: 'method_not_allowed' })
-    return
-  }
-  if (singleHeader(request, 'content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
-    writeJson(response, 415, { error: 'content_type_required' })
-    return
-  }
-
-  let bytes: Buffer
-  try {
-    bytes = await readBody(request)
-  } catch (error) {
-    writeJson(response, error instanceof BodyLimitError ? 413 : 400, { error: 'invalid_request' })
-    return
-  }
-  const timestamp = singleHeader(request, 'x-lain42-timestamp')
-  const nonce = singleHeader(request, 'x-lain42-nonce')
-  const signature = singleHeader(request, 'x-lain42-signature')
-  if (!verifySignature(secret, bytes, timestamp, nonce, signature, nonces)) {
-    writeJson(response, 401, { error: 'unauthorized' })
-    return
-  }
+  const bytes = await readSignedBody(request, response, secret, nonces, LAIN42_BRIDGE_PATH, BODY_LIMIT_BYTES)
+  if (bytes === undefined) return
   const turnRequest = parseTurnRequest(bytes)
   if (turnRequest === undefined) {
     writeJson(response, 400, { error: 'invalid_request' })
@@ -208,6 +239,39 @@ async function handleTurn(
     clearTimeout(timer)
     controller.abort()
   }
+}
+
+/** Enforce the operation-bound signature and bounded body before touching a Session. */
+async function readSignedBody(
+  request: IncomingMessage,
+  response: ServerResponse,
+  secret: string,
+  nonces: Map<string, number>,
+  operationPath: string,
+  limit: number,
+): Promise<Buffer | undefined> {
+  response.setHeader('cache-control', 'no-store')
+  if (request.method !== 'POST') {
+    writeJson(response, 405, { error: 'method_not_allowed' })
+    return undefined
+  }
+  if (singleHeader(request, 'content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+    writeJson(response, 415, { error: 'content_type_required' })
+    return undefined
+  }
+  let bytes: Buffer
+  try {
+    bytes = await readBody(request, limit)
+  } catch (error) {
+    writeJson(response, error instanceof BodyLimitError ? 413 : 400, { error: 'invalid_request' })
+    return undefined
+  }
+  if (!verifySignature(secret, bytes, singleHeader(request, 'x-lain42-timestamp'),
+    singleHeader(request, 'x-lain42-nonce'), singleHeader(request, 'x-lain42-signature'), nonces, operationPath)) {
+    writeJson(response, 401, { error: 'unauthorized' })
+    return undefined
+  }
+  return bytes
 }
 
 /** Follow durable events so retries can recover the result already committed for the same request id. */
@@ -351,11 +415,18 @@ function parseImages(value: unknown): readonly Lain42TurnImage[] | undefined {
  * @param timestamp Unix timestamp in seconds included in the signed headers.
  * @param nonce Unique 128-bit lowercase hexadecimal request nonce.
  * @param body Exact UTF-8 request bytes whose digest is included in the signature.
+ * @param operationPath Exact turn or cancellation path; defaults to turn.
  * @returns Lowercase hexadecimal HMAC-SHA256 signature.
  */
-export function signLain42BridgeRequest(secret: string, timestamp: string, nonce: string, body: Buffer): string {
+export function signLain42BridgeRequest(
+  secret: string,
+  timestamp: string,
+  nonce: string,
+  body: Buffer,
+  operationPath: typeof LAIN42_BRIDGE_PATH | typeof LAIN42_CANCEL_PATH = LAIN42_BRIDGE_PATH,
+): string {
   const bodyDigest = createHash('sha256').update(body).digest('hex')
-  const canonical = `v1\n${timestamp}\n${nonce}\nPOST\n${LAIN42_BRIDGE_PATH}\n${bodyDigest}`
+  const canonical = `v1\n${timestamp}\n${nonce}\nPOST\n${operationPath}\n${bodyDigest}`
   return createHmac('sha256', secret).update(canonical).digest('hex')
 }
 
@@ -366,6 +437,7 @@ function verifySignature(
   nonce: string | undefined,
   signature: string | undefined,
   nonces: Map<string, number>,
+  operationPath: string,
   nowSeconds = Math.floor(Date.now() / 1000),
 ): boolean {
   if (timestamp === undefined || !/^\d{10}$/.test(timestamp)
@@ -377,22 +449,23 @@ function verifySignature(
     if (expiry <= nowSeconds) nonces.delete(seen)
   }
   if (nonces.has(nonce) || nonces.size >= NONCE_LIMIT) return false
-  const expected = Buffer.from(signLain42BridgeRequest(secret, timestamp, nonce, body), 'hex')
+  const digest = createHash('sha256').update(body).digest('hex')
+  const expected = createHmac('sha256', secret).update(`v1\n${timestamp}\n${nonce}\nPOST\n${operationPath}\n${digest}`).digest()
   const received = Buffer.from(signature, 'hex')
   if (!timingSafeEqual(expected, received)) return false
   nonces.set(nonce, Math.max(nowSeconds, parsedTimestamp) + SIGNATURE_WINDOW_SECONDS)
   return true
 }
 
-async function readBody(request: IncomingMessage): Promise<Buffer> {
+async function readBody(request: IncomingMessage, limit: number): Promise<Buffer> {
   const declaredLength = Number(request.headers['content-length'])
-  if (Number.isFinite(declaredLength) && declaredLength > BODY_LIMIT_BYTES) throw new BodyLimitError()
+  if (Number.isFinite(declaredLength) && declaredLength > limit) throw new BodyLimitError()
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : Buffer.from(chunk)
     size += bytes.byteLength
-    if (size > BODY_LIMIT_BYTES) throw new BodyLimitError()
+    if (size > limit) throw new BodyLimitError()
     chunks.push(Buffer.from(bytes))
   }
   return Buffer.concat(chunks, size)
