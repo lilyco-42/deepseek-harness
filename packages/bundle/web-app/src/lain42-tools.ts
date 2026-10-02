@@ -176,7 +176,7 @@ export function apply(ctx: Context): void {
     text: ({ scope }) => {
       const visible = [
         'lain42_web_search', 'lain42_github_repositories',
-        'lain42_github_repositories_search', 'lain42_github_issues', 'lain42_github_pull_requests',
+        'lain42_github_repositories_search', 'lain42_github_issue', 'lain42_github_issues', 'lain42_github_pull_requests',
         'lain42_github_actions_runs', 'lain42_github_actions_jobs', 'lain42_github_actions_logs',
       ].filter(tool => ctx.tools.get(tool, scope) !== undefined)
       if (visible.length === 0) return ''
@@ -217,6 +217,18 @@ export function apply(ctx: Context): void {
       timeoutMs: RELAY_TIMEOUT_MS,
       isConcurrencySafe: () => true,
       execute: (args, exec) => callRelay('github_repositories_search', args as Record<string, unknown>, exec),
+    }),
+    defineTool({
+      name: 'lain42_github_issue',
+      description: 'Read one GitHub issue by repository and number, including closed issues, its body and up to three oldest comments. Use it to inspect a specific issue before proposing a fix. Truncation and comment errors mark partial evidence; do not claim unseen code or completed edits.',
+      parameters: {
+        repo: { type: 'string', required: true, description: 'Repository in owner/name form from the user request or a returned issue.' },
+        number: { type: 'integer', required: true, description: 'The issue number from the user request or a returned issue, from 1 to 2147483647.' },
+      },
+      output: outputText(),
+      timeoutMs: RELAY_TIMEOUT_MS,
+      isConcurrencySafe: () => true,
+      execute: (args, exec) => callRelay('github_issue', args as Record<string, unknown>, exec),
     }),
     repositoryReadTool('lain42_github_issues', 'issues', 'github_issues'),
     repositoryReadTool('lain42_github_pull_requests', 'pull requests', 'github_pull_requests'),

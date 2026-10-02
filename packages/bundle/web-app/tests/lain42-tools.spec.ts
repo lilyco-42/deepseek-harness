@@ -97,6 +97,7 @@ describe('Lain42 account tool relay', () => {
         'lain42_github_actions_jobs',
         'lain42_github_actions_logs',
         'lain42_github_actions_runs',
+        'lain42_github_issue',
         'lain42_github_issues',
         'lain42_github_pull_requests',
         'lain42_github_repositories',
@@ -348,6 +349,7 @@ describe('Lain42 account tool relay', () => {
         ['lain42_web_search', { query: 'Rust agents' }],
         ['lain42_github_repositories', { limit: 3 }],
         ['lain42_github_repositories_search', { query: 'ast-grep', limit: 3 }],
+        ['lain42_github_issue', { repo: 'owner/repo', number: 2 }],
         ['lain42_github_issues', { repo: 'owner/repo', limit: 3 }],
         ['lain42_github_pull_requests', { repo: 'owner/repo', limit: 3 }],
         ['lain42_github_actions_runs', { repo: 'owner/repo', status: 'completed', limit: 5 }],
@@ -363,7 +365,7 @@ describe('Lain42 account tool relay', () => {
       }
       expect(relayedTools).toEqual([
         'web_search', 'github_repositories', 'github_repositories_search',
-        'github_issues', 'github_pull_requests',
+        'github_issue', 'github_issues', 'github_pull_requests',
         'github_actions_runs', 'github_actions_jobs', 'github_actions_logs',
       ])
       expect(renderPrompt(await ctx.systemPrompt.assemble())).toContain('Use the Lain42 read-only tools')

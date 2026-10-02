@@ -4,6 +4,7 @@ export const expectedLain42AgentPrompts = {
     'lain42_github_actions_jobs',
     'lain42_github_actions_logs',
     'lain42_github_actions_runs',
+    'lain42_github_issue',
     'lain42_github_issues',
     'lain42_github_pull_requests',
     'lain42_github_repositories',
