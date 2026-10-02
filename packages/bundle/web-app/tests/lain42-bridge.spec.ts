@@ -629,6 +629,30 @@ describe('Lain42 private DSH bridge', () => {
     expect(warning).not.toHaveBeenCalled()
   })
 
+  it('ignores invalid and unrelated Inbox removals while following the requested answer', async () => {
+    const sessionController = inactiveSessionController(() => frames([
+      wireFrame('agent/inbox/spliced', { target: 'invalid', start: 0, inserted: [] }),
+      wireFrame('agent/inbox/spliced', { target: 'next-step', start: -1, inserted: [] }),
+      wireFrame('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 0.5, inserted: [] }),
+      wireFrame('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: null }),
+      wireFrame('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [
+        null, { source: { kind: 'tool', rpcId: REQUEST_ID } }, { source: { kind: 'user', rpcId: 'other' } },
+        { source: { kind: 'user', rpcId: REQUEST_ID } },
+      ] }),
+      wireFrame('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 3, inserted: [], outcome: 'canceled' }),
+      wireFrame('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] }),
+      wireFrame('turn/start', { turn: 5 }),
+      wireFrame('user/message', { source: { kind: 'user', rpcId: REQUEST_ID } }),
+      wireFrame('assistant/message', { turn: 5, message: { content: [{ type: 'text', text: 'Requested answer.' }] } }),
+      wireFrame('turn/end', { turn: 5, reason: { kind: 'completed' } }),
+    ]))
+    const baseUrl = await listen(createLain42BridgeHandler(sessionController, SECRET, vi.fn()))
+    const response = await post(baseUrl, jsonBody(validRequest()))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ answer: 'Requested answer.' })
+    expect(sessionController.cancel).not.toHaveBeenCalled()
+  })
+
   it('returns unavailable when no matching user turn is present', async () => {
     const sessionController = inactiveSessionController(() => frames([
       assistantStreamFrame(),

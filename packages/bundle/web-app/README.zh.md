@@ -72,7 +72,7 @@ dsh --profile web --no-open --port 8080
 
 `enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本，以及由 New API 选择的必填模型 ID；`general`、`coding`、`research`、`content` 模式可以省略，省略时使用 `general`。缺少模型 ID 的请求会被拒绝，不会回退到 DSH 进程级默认模型。v2 请求还可以携带最多 4 张 PNG、JPEG、WebP 或 GIF 图片，解码后合计不超过 8 MiB；图片会先通过 DSH 现有的附件校验，再进入模型请求。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，不支持流式传输或任意二进制附件。
 
-同一选项还会注册 `POST /lain42/bridge/v1/cancel`。其独立签名的 JSON 请求体最多为 4096 字节，只包含版本 `1`、原始会话 ID 和请求 ID；对话路由的签名不能授权取消操作。该路由调用 `sessionController.cancelPrompt`，并在回执中保留原始身份。`removed` 表示已移除排队输入；`cancellation-requested` 标识一个仍须观察终态事件的活动轮次。回执不证明任务已进入终态。`not-found` 不会为未来输入预留身份或取消未来输入；控制面负责保存取消意图并协调接收过程。仅有网络断开不会取消工作。
+同一选项还会注册 `POST /lain42/bridge/v1/cancel`。其独立签名的 JSON 请求体最多为 4096 字节，只包含版本 `1`、原始会话 ID 和请求 ID；对话路由的签名不能授权取消操作。该路由调用 `sessionController.cancelPrompt`，并在回执中保留原始身份。`removed` 表示已移除排队输入；`cancellation-requested` 标识一个仍须观察终态事件的活动轮次。回执不证明任务已进入终态。对话等待器重放已提交的 Inbox 变更：自身排队请求被取消后立即结束观察，不等待不存在的轮次；请求被确切领取后，会在首条用户消息出现前确定所属轮次。`not-found` 不会为未来输入预留身份或取消未来输入；控制面负责保存取消意图并协调接收过程。仅有网络断开不会取消工作。
 
 该 preset 还会挂载 `@deepseek-ai/dsh-web-app/lain42-tools`。中继默认使用 `https://api.lain42.top/api/agent/bridge/v1/tool`；只有切换到其他环境时才需要用 `LAIN42_AGENT_TOOL_RELAY_URL` 覆盖。DSH 服务使用已有的 `LAIN42_DSH_BRIDGE_SECRET` 为有界请求签名。New API 验证 HMAC 和一次性 nonce 后，根据已保存的 DSH 会话归属解析 Lain42 账号，并仅执行指定的只读搜索、网页读取、仓库、Issue 或 PR 操作。GitHub OAuth 令牌留在 New API，按解析出的账号选择，不会发送到 DSH 或浏览器。公开网页和仓库内容都作为不可信模型输入。如果中继 URL 或共享密钥无效，工具会返回可操作的服务不可用提示，不会让普通聊天整体停用。
 
@@ -163,6 +163,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>
+
+- **Lain42 历史窗口**——私有对话等待器从最近 50 条消息开始观察。请求或其先前的 Inbox 插入位于窗口之外时无法重建；更早结果的查询与托管终态回传仍未完成。仅有取消回执不代表结果已恢复。
 
 
 这些限制告诉你在不常见的环境下会遇到什么——源码 checkout、SSH 会话或严格网络。它们是当前包约束，不是通用的浏览器对比或任务积压。

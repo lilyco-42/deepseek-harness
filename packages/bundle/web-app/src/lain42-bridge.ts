@@ -285,6 +285,7 @@ async function collectTurn(
   let currentTurn: number | undefined
   let targetTurn: number | undefined
   let answer: string | undefined
+  const queues: Record<'next-turn' | 'next-step', unknown[]> = { 'next-turn': [], 'next-step': [] }
   for await (const frame of sessionController.follow({
     address: { kind: 'session', sessionId },
     maxMessages: FOLLOW_MAX_MESSAGES,
@@ -293,7 +294,25 @@ async function collectTurn(
     for (const event of events) {
       const data = asRecord(event.data)
       if (data === undefined) continue
-      if (event.type === 'turn/start') {
+      if (event.type === 'agent/inbox/spliced') {
+        const target = data.target
+        const start = finiteNumber(data.start)
+        const removedCount = data.removedCount === undefined ? 0 : finiteNumber(data.removedCount)
+        if ((target !== 'next-turn' && target !== 'next-step') || start === undefined
+          || removedCount === undefined || !Array.isArray(data.inserted)) continue
+        const removed = queues[target].splice(start, removedCount, ...data.inserted)
+        const matching = removed.some((message) => {
+          const source = asRecord(asRecord(message)?.source)
+          return source?.kind === 'user' && source.rpcId === requestId
+        })
+        if (!matching) continue
+        // Inbox removals are committed before user/message; a queued Stop has
+        // no turn/end, while an exact claim can abort before its first message.
+        if (data.outcome === 'canceled') return { failure: 'failed' }
+        targetTurn = currentTurn
+        if (targetTurn !== undefined) onTargetTurn(targetTurn)
+        answer = undefined
+      } else if (event.type === 'turn/start') {
         currentTurn = finiteNumber(data.turn)
       } else if (event.type === 'user/message') {
         const source = asRecord(data.source)
