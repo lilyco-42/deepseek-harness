@@ -300,7 +300,8 @@ async function collectTurn(
         const removedCount = data.removedCount === undefined ? 0 : finiteNumber(data.removedCount)
         if ((target !== 'next-turn' && target !== 'next-step') || start === undefined
           || removedCount === undefined || !Array.isArray(data.inserted)) continue
-        const removed = queues[target].splice(start, removedCount, ...data.inserted)
+        const inserted = data.inserted.map((message: unknown): unknown => message)
+        const removed = queues[target].splice(start, removedCount, ...inserted)
         const matching = removed.some((message) => {
           const source = asRecord(asRecord(message)?.source)
           return source?.kind === 'user' && source.rpcId === requestId

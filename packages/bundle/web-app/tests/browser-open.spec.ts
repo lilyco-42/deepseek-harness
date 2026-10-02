@@ -218,11 +218,16 @@ describe('web app browser startup', () => {
     await vi.waitFor(() => {
       expect(ctx.get('webRuntime')).toEqual({ lanAddresses: [], trustedHosts: [] })
       expect(ctx.get('sessionController')).toBeDefined()
-      expect(server.register).toHaveBeenCalledOnce()
-      const route = server.register.mock.calls[0]?.[0]
-      expect(route?.kind).toBe('exact')
-      expect(route?.path).toBe('/lain42/bridge/v1/turn')
-      expect(typeof route?.handler).toBe('function')
+      expect(server.register).toHaveBeenCalledTimes(2)
+      const routes = server.register.mock.calls.map(([route]) => route)
+      expect(routes.map((route) => route.path)).toEqual(expect.arrayContaining([
+        '/lain42/bridge/v1/turn',
+        '/lain42/bridge/v1/cancel',
+      ]))
+      for (const route of routes) {
+        expect(route.kind).toBe('exact')
+        expect(typeof route.handler).toBe('function')
+      }
     })
   })
 })
