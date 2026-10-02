@@ -204,7 +204,7 @@ describe('Lain42 private DSH bridge', () => {
         const baseUrl = await listen(route.handler)
         const result = await post(baseUrl, jsonBody(validRequest()))
         expect(result.status).toBe(outcome === 'committed' ? 200 : 502)
-        const body = await result.json()
+        const body: unknown = await result.json()
         expect(body).toEqual(outcome === 'committed'
           ? { version: 1, requestId: REQUEST_ID, answer: 'DeepSeek is an AI company and model family.' }
           : { error: 'agent_turn_failed' })
