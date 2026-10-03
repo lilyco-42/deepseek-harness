@@ -39,6 +39,7 @@ jobs:
         run: |
           pnpm run gen-cordis-catalog
           pnpm run gen-doc-graphs
+          pnpm run verify-translation-pairing --write docs/event-producer-consumer.md
           pnpm run gen-persistence-catalog
           if [ ! -f docs/persistence-changes/2026-10-03-request-context.md ]; then
             pnpm --silent run persistence-changes --record 2026-10-03-request-context --prose .github/lain42-request-context-prose.json --json
@@ -55,6 +56,8 @@ jobs:
             docs/subsystems/session.zh.md
             docs/subsystems/session.i18n.yaml
             docs/event-producer-consumer.md
+            docs/event-producer-consumer.zh.md
+            docs/event-producer-consumer.i18n.yaml
             docs/persistence-schema.json
             docs/persistence-catalog.md
             docs/persistence-catalog.zh.md

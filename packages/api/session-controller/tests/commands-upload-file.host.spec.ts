@@ -503,7 +503,12 @@ describe('Session file uploads', () => {
     await expect(second.controller.prompt({ ...request, requestContext: null })).rejects.toMatchObject({
       details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
-    await expect(second.controller.prompt({ ...request, requestContext: undefined })).rejects.toMatchObject({
+    await expect(second.controller.prompt({
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      mode: request.mode,
+      content: request.content,
+    })).rejects.toMatchObject({
       details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     expect(second.followup).not.toHaveBeenCalled()
