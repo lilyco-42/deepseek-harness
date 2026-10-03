@@ -9,7 +9,7 @@ import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/t
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import type { ToolExecution, ToolExecutionToken, ToolGuard, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import * as lain42Tools from '../src/lain42-tools.ts'
 
 const SECRET = 'test-only-lain42-tool-relay-secret-with-32-bytes'
@@ -87,14 +87,10 @@ describe('Lain42 account tool relay', () => {
     const message = createUserMessage({ content: [{ type: 'text', text: 'Public read.' }],
       source: { kind: 'user', rpcId: '11111111-1111-4111-8111-111111111111',
         requestContext: { lain42: { version: 1, toolScope: 'public-only' } } } })
-    let guard: ToolGuard | undefined
-    const registerGuard = ToolRuntime.prototype.guard
-    const guardSpy = vi.spyOn(ToolRuntime.prototype, 'guard').mockImplementation(function (this: ToolRuntime, candidate) {
-      guard = candidate
-      return registerGuard.call(this, candidate)
-    })
+    const guardSpy = vi.spyOn(ToolRuntime.prototype, 'guard')
     try {
       const plugin = await owner.ctx.plugin(lain42Tools)
+      const guard = guardSpy.mock.calls[0]?.[0]
       const target = scopeTarget(selectedAgent, selectedAgent)
       ctx.emit(target, 'agent/created', { agent: selectedAgent, source: 'startup' })
       expect(ctx.tools.schemas(selectedAgent)).toEqual([])

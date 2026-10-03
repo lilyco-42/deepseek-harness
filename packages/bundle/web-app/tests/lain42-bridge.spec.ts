@@ -57,10 +57,13 @@ describe('Lain42 private DSH bridge', () => {
         headers: signedHeaders(body, currentTimestamp(), nextNonce()), body: Uint8Array.from(body) })
       expect(result.status).toBe(200)
       expect(await result.json()).toMatchObject({ requestId: REQUEST_ID })
+      const admission = vi.mocked(controller.prompt).mock.calls[0]?.[0]
+      if (admission === undefined) throw new Error('Expected a signed request admission')
+      expect(admission.requestContextDigest).toMatch(/^[a-f0-9]{64}$/u)
       expect(controller.prompt).toHaveBeenCalledWith({
         sessionId: SESSION_ID, requestId: REQUEST_ID, mode: 'queue',
         modelSelection: { provider: 'lain42-web', model: 'composition-model' },
-        requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
+        requestContextDigest: admission.requestContextDigest,
         requestContext: { lain42: { version: 1, toolScope } },
         content: [{ type: 'text', text: 'Use only the requested sources.' },
           ...(withImages ? [{ type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }] : [])],
