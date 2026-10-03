@@ -45,11 +45,11 @@ it('returns exact issue evidence to model continuation and replays the recorded 
         response.end(JSON.stringify({ version: 1, result: tool.tool === 'web_search'
           ? { items: [{ title: 'ast-grep', url: PUBLIC_URL, snippet: 'Official structural search repository.' }] }
           : {
-          repo: 'owner/project', items: [{ number: 2, state: 'closed', title: 'Export retry',
-            body: 'A reconnect delivers the same export twice.', url: ISSUE_URL }],
-          comments: [{ body: 'It still reproduces after a lost response.', author: 'maintainer' }],
-          comments_order: 'oldest first', comments_truncated: false,
-        } }))
+            repo: 'owner/project', items: [{ number: 2, state: 'closed', title: 'Export retry',
+              body: 'A reconnect delivers the same export twice.', url: ISSUE_URL }],
+            comments: [{ body: 'It still reproduces after a lost response.', author: 'maintainer' }],
+            comments_order: 'oldest first', comments_truncated: false,
+          } }))
         return
       }
       if (incoming.url !== '/v1/agent/chat/completions') {

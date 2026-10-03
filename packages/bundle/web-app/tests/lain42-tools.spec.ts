@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { createScope, scopeTarget } from '@deepseek-ai/dsh-scope'
+import { bindScopeParent, createScope, scopeTarget } from '@deepseek-ai/dsh-scope'
 import SessionStore from '@deepseek-ai/dsh-session'
 import SessionProjections from '@deepseek-ai/dsh-session-projection'
 import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolExecutionToken, ToolGuard, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import * as lain42Tools from '../src/lain42-tools.ts'
 
 const SECRET = 'test-only-lain42-tool-relay-secret-with-32-bytes'
@@ -71,6 +71,114 @@ function readRelayToolName(body: BodyInit | null | undefined): string {
 }
 
 describe('Lain42 account tool relay', () => {
+  it('revokes claim previews on stale turns and disposal, and denies incomplete execution identities', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjections)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const generation = {}
+    const owner = createScope(ctx, generation)
+    const session = ctx.sessions.create(SESSION_ID)
+    const selectedAgent = { id: SESSION_ID, session } as NonNullable<ToolRunContext['agent']>
+    const scope = createScope(ctx, selectedAgent)
+    bindScopeParent(selectedAgent, generation)
+    Object.assign(selectedAgent, { ctx: scope.ctx })
+    const message = createUserMessage({ content: [{ type: 'text', text: 'Public read.' }],
+      source: { kind: 'user', rpcId: '11111111-1111-4111-8111-111111111111',
+        requestContext: { lain42: { version: 1, toolScope: 'public-only' } } } })
+    let guard: ToolGuard | undefined
+    const registerGuard = ToolRuntime.prototype.guard
+    const guardSpy = vi.spyOn(ToolRuntime.prototype, 'guard').mockImplementation(function (this: ToolRuntime, candidate) {
+      guard = candidate
+      return registerGuard.call(this, candidate)
+    })
+    try {
+      const plugin = await owner.ctx.plugin(lain42Tools)
+      const target = scopeTarget(selectedAgent, selectedAgent)
+      ctx.emit(target, 'agent/created', { agent: selectedAgent, source: 'startup' })
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      ctx.emit(target, 'agent/inbox/claimed', { agent: selectedAgent, message, turn: 1 })
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      session.append('turn/start', { turn: 1 })
+      ctx.emit(target, 'agent/inbox/claimed', { agent: selectedAgent, message, turn: 1 })
+      ctx.emit(target, 'agent/inbox/claimed', { agent: selectedAgent, message, turn: 1 })
+      expect(ctx.tools.schemas(selectedAgent).map(tool => tool.name)).toEqual(['lain42_web_search'])
+      ctx.emit(target, 'agent/status', { agent: selectedAgent, status: 'running' })
+      expect(ctx.tools.schemas(selectedAgent).map(tool => tool.name)).toEqual(['lain42_web_search'])
+      if (guard === undefined) throw new Error('Expected the scoped execution guard')
+      const exec: ToolExecution = { callId: ToolCallId('incomplete-identity'), rootCallId: ToolCallId('incomplete-identity'),
+        token: Symbol('test-execution') as ToolExecutionToken, name: 'lain42_web_search',
+        arguments: { query: 'test' }, signal: new AbortController().signal }
+      expect(guard(exec)).toBe('The current request does not permit this tool.')
+      expect(guard({ ...exec, name: 'unregistered_write', agent: selectedAgent }))
+        .toBe('The current request does not permit this tool.')
+      expect(guard({ ...exec, name: 'lain42_github_issue', agent: selectedAgent }))
+        .toBe('The current request does not permit this tool.')
+      session.append('user/message', message, { surfaceOp: 'append' })
+      expect(guard({ ...exec, agent: selectedAgent })).toBeUndefined()
+      ctx.emit(target, 'agent/inbox/claimed', { agent: selectedAgent, message, turn: 2 })
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      const missingPolicy = vi.spyOn(ctx.sessionProjections, 'stateOf').mockReturnValue(undefined)
+      try {
+        ctx.emit(target, 'agent/inbox/claimed', { agent: selectedAgent, message, turn: 1 })
+        expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+        expect(guard({ ...exec, agent: selectedAgent })).toBe('The current request does not permit this tool.')
+      } finally {
+        missingPolicy.mockRestore()
+      }
+      ctx.emit(target, 'agent/disposed', { agent: selectedAgent })
+      ctx.emit(target, 'agent/disposed', { agent: selectedAgent })
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      await plugin.dispose()
+      expect(ctx.sessionProjections.stateOf(session, 'lain42RequestPolicy')).toBeUndefined()
+    } finally {
+      guardSpy.mockRestore()
+      await scope.dispose()
+      await owner.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('fails closed when a scoped deployment is missing Session projections', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const scope = createScope(ctx, {})
+    try {
+      await expect(scope.ctx.plugin(lain42Tools)).rejects.toThrow('Scoped Lain42 tools require Session projections')
+      expect(ctx.tools.schemas()).toEqual([])
+    } finally {
+      await scope.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('fails Agent initialization when its context has no tool runtime', async () => {
+    const ctx = new Context()
+    const generation = {}
+    const scope = createScope(ctx, generation)
+    const detached = new Context()
+    try {
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(SessionStore)
+      await ctx.plugin(SessionProjections)
+      const plugin = await scope.ctx.plugin(lain42Tools)
+      const session = ctx.sessions.create(SESSION_ID)
+      const selectedAgent = { id: SESSION_ID, session, ctx: detached } as NonNullable<ToolRunContext['agent']>
+      bindScopeParent(selectedAgent, generation)
+      await expect(ctx.serial(scopeTarget(selectedAgent, selectedAgent), 'agent/created',
+        { agent: selectedAgent, source: 'startup' })).rejects.toThrow('The Agent scope requires a tool runtime')
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      await plugin.dispose()
+    } finally {
+      await detached.fiber.dispose()
+      await scope.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('narrows schemas before assembly, checks direct execution against the committed RPC and removes policy on disposal', async () => {
     vi.stubEnv('LAIN42_AGENT_TOOL_RELAY_URL', RELAY_URL)
     vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)

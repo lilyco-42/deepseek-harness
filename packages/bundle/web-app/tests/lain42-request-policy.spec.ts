@@ -43,6 +43,11 @@ it('restores the current RPC permission and clears it before the next independen
   expect(permitsLain42Tool(publicPolicy, 'arbitrary_write')).toBe(false)
   const replay = ctx.sessions.create(SessionId('policy-replay'), { seed: session.ownEvents() })
   expect(ctx.sessionProjections.stateOf(replay, 'lain42RequestPolicy')).toEqual(publicPolicy)
+  const restored = lain42RequestPolicyProjection.stateSchema.parse(JSON.parse(JSON.stringify(publicPolicy)))
+  expect(restored).toEqual(publicPolicy)
+  expect(permitsLain42Tool(restored, 'github_issue')).toBe(false)
+  expect(lain42RequestPolicyProjection.stateSchema.safeParse({ ...restored, requestId: 'bad-id' }).success).toBe(false)
+  expect(lain42RequestPolicyProjection.stateSchema.safeParse({ ...restored, toolScope: 'write' }).success).toBe(false)
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   expect(permitsLain42Tool(ctx.sessionProjections.stateOf(session, 'lain42RequestPolicy'), 'web_search')).toBe(false)
   session.append('turn/start', { turn: 2 })
@@ -76,6 +81,7 @@ it('rejects malformed or conflicting policy without accepting tool names or text
   expect(claimLain42RequestPolicy(restricted, message(undefined, SECOND)).kind).toBe('invalid')
   expect(claimLain42RequestPolicy(initial, message(undefined, brandString<SessionRequestId>('not-a-website-id'))).kind).toBe('invalid')
   expect(permitsLain42Tool(undefined, 'web_search')).toBe(false)
+  expect(permitsLain42Tool({ ...restricted, kind: 'invalid' }, 'web_search')).toBe(false)
 })
 
 it('keeps legacy RPCs distinct from idle, injected context and unknown tools', () => {

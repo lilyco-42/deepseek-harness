@@ -48,7 +48,7 @@ export function isLain42ToolScope(value: unknown): value is Lain42ToolScope {
  */
 export function claimLain42RequestPolicy(current: Lain42RequestPolicy, message: UserMessage): Lain42RequestPolicy {
   const source = message.source
-  if (current.turn === null || source?.kind !== 'user' || !('rpcId' in source)) return current
+  if (current.turn === null || source.kind !== 'user' || !('rpcId' in source)) return current
   const invalid: Lain42RequestPolicy = {
     turn: current.turn, kind: 'invalid', requestId: null, toolScope: null,
   }

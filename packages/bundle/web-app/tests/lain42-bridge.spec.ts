@@ -60,7 +60,7 @@ describe('Lain42 private DSH bridge', () => {
       expect(controller.prompt).toHaveBeenCalledWith({
         sessionId: SESSION_ID, requestId: REQUEST_ID, mode: 'queue',
         modelSelection: { provider: 'lain42-web', model: 'composition-model' },
-        requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
         requestContext: { lain42: { version: 1, toolScope } },
         content: [{ type: 'text', text: 'Use only the requested sources.' },
           ...(withImages ? [{ type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }] : [])],
