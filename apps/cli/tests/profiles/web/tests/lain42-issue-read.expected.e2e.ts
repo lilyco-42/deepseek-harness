@@ -14,7 +14,12 @@ const SECRET = 'keyless-lain42-issue-read-composition-secret'
 const SESSION = 'b'.repeat(64)
 const MODEL = 'composition-model'
 const REQUEST = '44444444-4444-4444-8444-444444444444'
+const PUBLIC_REQUEST = '33333333-3333-4333-8333-333333333333'
+const EVIDENCE_REQUEST = '55555555-5555-4555-8555-555555555555'
 const ISSUE_URL = 'https://github.com/owner/project/issues/2'
+const PUBLIC_URL = 'https://github.com/ast-grep/ast-grep'
+const PUBLIC_ANSWER = `The official repository is ast-grep/ast-grep. Source: ${PUBLIC_URL}`
+const EVIDENCE_ANSWER = 'The supplied note says revision seven; no additional lookup was needed.'
 const ANSWER = `The closed issue still reproduces after a lost response. Persist an export request ID before retrying. Source: ${ISSUE_URL}`
 
 it('returns exact issue evidence to model continuation and replays the recorded answer without rereading', async (test) => {
@@ -36,7 +41,10 @@ it('returns exact issue evidence to model continuation and replays the recorded 
             String(incoming.headers['x-lain42-timestamp']), String(incoming.headers['x-lain42-nonce']), Buffer.from(body)),
         })
         response.writeHead(200, { 'content-type': 'application/json' })
-        response.end(JSON.stringify({ version: 1, result: {
+        const tool = JSON.parse(body) as { tool: string }
+        response.end(JSON.stringify({ version: 1, result: tool.tool === 'web_search'
+          ? { items: [{ title: 'ast-grep', url: PUBLIC_URL, snippet: 'Official structural search repository.' }] }
+          : {
           repo: 'owner/project', items: [{ number: 2, state: 'closed', title: 'Export retry',
             body: 'A reconnect delivers the same export twice.', url: ISSUE_URL }],
           comments: [{ body: 'It still reproduces after a lost response.', author: 'maintainer' }],
@@ -50,13 +58,17 @@ it('returns exact issue evidence to model continuation and replays the recorded 
       }
       modelRequests.push(body)
       response.writeHead(200, { 'content-type': 'text/event-stream' })
-      const delta = modelRequests.length === 1
-        ? { role: 'assistant', tool_calls: [{ index: 0, id: 'read-issue-2', type: 'function',
-          function: { name: 'lain42_github_issue', arguments: JSON.stringify({ repo: 'owner/project', number: 2 }) } }] }
-        : { role: 'assistant', content: ANSWER }
+      const step = modelRequests.length
+      const toolName = step === 1 || step === 4 ? 'lain42_github_issue'
+        : step === 2 || step === 6 ? 'lain42_web_search' : undefined
+      const delta = toolName === undefined
+        ? { role: 'assistant', content: step === 3 ? PUBLIC_ANSWER : step === 5 ? ANSWER : EVIDENCE_ANSWER }
+        : { role: 'assistant', tool_calls: [{ index: 0, id: `read-${String(step)}`, type: 'function',
+          function: { name: toolName, arguments: JSON.stringify(toolName === 'lain42_web_search'
+            ? { query: 'ast-grep official repository' } : { repo: 'owner/project', number: 2 }) } }] }
       response.end([
         `data: ${JSON.stringify({ choices: [{ delta, index: 0, finish_reason: null }] })}`,
-        `data: ${JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: modelRequests.length === 1 ? 'tool_calls' : 'stop' }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, index: 0, finish_reason: toolName === undefined ? 'stop' : 'tool_calls' }] })}`,
         'data: [DONE]', '',
       ].join('\n\n'))
     })
@@ -92,17 +104,47 @@ it('returns exact issue evidence to model continuation and replays the recorded 
     LAIN42_AGENT_TOOL_RELAY_URL: `${origin}/api/agent/bridge/v1/tool`,
     LAIN42_COMPOSITION_KEY: 'keyless-test-model-only', HTTP_PROXY: undefined, HTTPS_PROXY: undefined, ALL_PROXY: undefined,
   } }
-  const turn = { version: 1, sessionId: SESSION, requestId: REQUEST, model: MODEL,
+  const turn = { version: 3, toolScope: 'account-read', sessionId: SESSION, requestId: REQUEST, model: MODEL,
     text: `Read ${ISSUE_URL} and propose a fix based on its discussion.` }
+  const publicTurn = { ...turn, requestId: PUBLIC_REQUEST, toolScope: 'public-only',
+    text: 'Search the public web for the official ast-grep repository. Do not access my account.' }
+  const evidenceTurn = { ...turn, requestId: EVIDENCE_REQUEST, toolScope: 'evidence-only',
+    text: 'Explain only this supplied note: revision seven. Do not search or read my account.' }
   await withDefaultWeb(test, async ({ url }) => {
-    expect(await signedTurn(url, turn, test.signal)).toMatchObject({ status: 200, body: { requestId: REQUEST, answer: ANSWER } })
-    expect(modelRequests).toHaveLength(2)
+    expect(await signedTurn(url, publicTurn, test.signal)).toMatchObject({ status: 200,
+      body: { requestId: PUBLIC_REQUEST, answer: PUBLIC_ANSWER } })
+    expect(modelRequests).toHaveLength(3)
     expect(toolRequests).toHaveLength(1)
-    expect(JSON.parse(toolRequests[0]!)).toEqual({ version: 1, session_id: SESSION, tool: 'github_issue', arguments: { repo: 'owner/project', number: 2 } })
+    expect(JSON.parse(toolRequests[0]!)).toEqual({ version: 2, session_id: SESSION,
+      request_id: PUBLIC_REQUEST, tool: 'web_search', arguments: { query: 'ast-grep official repository' } })
+    for (const requestBody of modelRequests) {
+      const modelRequest = JSON.parse(requestBody) as { tools: Array<{ function: { name: string } }> }
+      expect(modelRequest.tools.map(tool => tool.function.name)).toEqual(['lain42_web_search'])
+    }
+    expect(modelRequests[1]).toContain('unknown tool')
+    expect(modelRequests[2]).toContain(PUBLIC_URL)
+    expect(await signedTurn(url, { ...publicTurn, toolScope: 'account-read' }, test.signal)).toMatchObject({ status: 409 })
+    expect(toolRequests).toHaveLength(1)
+    expect(modelRequests).toHaveLength(3)
+    expect(await signedTurn(url, turn, test.signal)).toMatchObject({ status: 200, body: { requestId: REQUEST, answer: ANSWER } })
+    expect(modelRequests).toHaveLength(5)
+    expect(toolRequests).toHaveLength(2)
+    expect(JSON.parse(toolRequests[1]!)).toEqual({ version: 2, session_id: SESSION, request_id: REQUEST,
+      tool: 'github_issue', arguments: { repo: 'owner/project', number: 2 } })
     expect(signatures[0]?.actual).toBe(signatures[0]?.expected)
-    expect(modelRequests[1]).toContain('It still reproduces after a lost response.')
-    expect(modelRequests[1]).toContain('closed')
-    expect(modelRequests[1]).toContain(ISSUE_URL)
+    expect(signatures[1]?.actual).toBe(signatures[1]?.expected)
+    expect(modelRequests[4]).toContain('It still reproduces after a lost response.')
+    expect(modelRequests[4]).toContain('closed')
+    expect(modelRequests[4]).toContain(ISSUE_URL)
+    expect(await signedTurn(url, evidenceTurn, test.signal)).toMatchObject({ status: 200,
+      body: { requestId: EVIDENCE_REQUEST, answer: EVIDENCE_ANSWER } })
+    expect(modelRequests).toHaveLength(7)
+    expect(toolRequests).toHaveLength(2)
+    for (const requestBody of modelRequests.slice(5)) {
+      const modelRequest = JSON.parse(requestBody) as { tools?: unknown[] }
+      expect(modelRequest.tools ?? []).toEqual([])
+    }
+    expect(modelRequests[6]).toContain('unknown tool')
     // Read while the process is still alive: disposal must not provide the barrier.
     const sessionRoot = join(options.home, 'sessions')
     const logs = (await readdir(sessionRoot, { recursive: true })).filter(path => path.endsWith('.jsonl.zstd'))
@@ -116,12 +158,20 @@ it('returns exact issue evidence to model continuation and replays the recorded 
     expect(recorded).toContain('lain42_github_issue')
     expect(recorded).toContain('It still reproduces after a lost response.')
     expect(recorded).toContain(ANSWER)
+    expect(recorded).toContain('public-only')
+    expect(recorded).toContain('evidence-only')
+    expect(recorded).toContain('account-read')
   }, options)
 
   await withDefaultWeb(test, async ({ url }) => {
     expect(await signedTurn(url, turn, test.signal)).toMatchObject({ status: 200, body: { requestId: REQUEST, answer: ANSWER } })
-    expect(modelRequests).toHaveLength(2)
-    expect(toolRequests).toHaveLength(1)
+    expect(await signedTurn(url, publicTurn, test.signal)).toMatchObject({ status: 200,
+      body: { requestId: PUBLIC_REQUEST, answer: PUBLIC_ANSWER } })
+    expect(await signedTurn(url, evidenceTurn, test.signal)).toMatchObject({ status: 200,
+      body: { requestId: EVIDENCE_REQUEST, answer: EVIDENCE_ANSWER } })
+    expect(await signedTurn(url, { ...publicTurn, toolScope: 'account-read' }, test.signal)).toMatchObject({ status: 409 })
+    expect(modelRequests).toHaveLength(7)
+    expect(toolRequests).toHaveLength(2)
   }, options)
 })
 

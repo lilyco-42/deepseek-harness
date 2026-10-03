@@ -13,6 +13,8 @@ import type {
   SessionPromptRequest,
   SessionRequestId,
 } from '@deepseek-ai/dsh-api-session-controller/types'
+import { isLain42ToolScope } from './lain42-request-policy.ts'
+import type { Lain42ToolScope } from './lain42-request-policy.ts'
 
 /** Exact server-only path for HMAC-authenticated Lain42 Agent turns. */
 export const LAIN42_BRIDGE_PATH = '/lain42/bridge/v1/turn'
@@ -45,8 +47,7 @@ interface Lain42TurnImage {
   readonly data: string
 }
 
-interface Lain42TurnRequest {
-  readonly version: 1 | 2
+interface Lain42TurnInput {
   readonly sessionId: string
   readonly requestId: string
   readonly model: string
@@ -54,6 +55,11 @@ interface Lain42TurnRequest {
   readonly text: string
   readonly images?: readonly Lain42TurnImage[]
 }
+
+type Lain42TurnRequest = Lain42TurnInput & (
+  | { readonly version: 1 | 2 }
+  | { readonly version: 3; readonly toolScope: Lain42ToolScope }
+)
 
 type TurnResult =
   | { readonly answer: string }
@@ -213,6 +219,9 @@ async function handleTurn(
       mode: 'queue',
       modelSelection: { provider: PRESET_ID, model: turnRequest.model },
       requestContextDigest: requestContextDigest(turnRequest),
+      ...(turnRequest.version === 3
+        ? { requestContext: { lain42: { version: 1, toolScope: turnRequest.toolScope } } }
+        : {}),
       content,
     }, controller.signal)
     promptAccepted = true
@@ -395,8 +404,8 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   const keys = Object.keys(record).sort()
   const requiredKeys = ['model', 'requestId', 'sessionId', 'text', 'version']
   if (requiredKeys.some(key => !keys.includes(key))
-    || keys.some(key => key !== 'model' && key !== 'mode' && key !== 'images' && !requiredKeys.includes(key))) return undefined
-  if ((record.version !== 1 && record.version !== 2) || typeof record.sessionId !== 'string'
+    || keys.some(key => key !== 'mode' && key !== 'images' && key !== 'toolScope' && !requiredKeys.includes(key))) return undefined
+  if ((record.version !== 1 && record.version !== 2 && record.version !== 3) || typeof record.sessionId !== 'string'
     || !/^[A-Za-z0-9]{64}$/.test(record.sessionId)
     || typeof record.requestId !== 'string'
     // New API derives deterministic UUIDv5 IDs from account-scoped message
@@ -408,13 +417,14 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
   const images = hasImagesField ? parseImages(record.images) : undefined
   if (record.version === 1 && hasImagesField) return undefined
   if (record.version === 2 && (images === undefined || images.length === 0)) return undefined
+  if (record.version === 3 && hasImagesField && images === undefined) return undefined
+  if (record.version !== 3 && Object.hasOwn(record, 'toolScope')) return undefined
   if (record.text.trim().length === 0 && (images?.length ?? 0) === 0) return undefined
   const model = record.model
   if (typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model)) return undefined
   const mode = record.mode === undefined ? 'general' : record.mode
   if (typeof mode !== 'string' || !Object.hasOwn(PRESET_BY_MODE, mode)) return undefined
-  return {
-    version: record.version,
+  const input: Lain42TurnInput = {
     sessionId: record.sessionId,
     requestId: record.requestId,
     model,
@@ -422,6 +432,11 @@ function parseTurnRequest(bytes: Buffer): Lain42TurnRequest | undefined {
     text: record.text,
     ...(images === undefined ? {} : { images }),
   }
+  if (record.version === 3) {
+    if (!isLain42ToolScope(record.toolScope)) return undefined
+    return { ...input, version: 3, toolScope: record.toolScope }
+  }
+  return { ...input, version: record.version }
 }
 
 function parseImages(value: unknown): readonly Lain42TurnImage[] | undefined {

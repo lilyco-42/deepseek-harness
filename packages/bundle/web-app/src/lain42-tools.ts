@@ -4,6 +4,13 @@ import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-agent'
+import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
+import { scopeOf } from '@deepseek-ai/dsh-scope'
+import {
+  claimLain42RequestPolicy, lain42RequestPolicyProjection, permitsLain42Tool,
+} from './lain42-request-policy.ts'
+import type { Lain42RequestPolicy } from './lain42-request-policy.ts'
 
 export const name = 'lain42-tools'
 export const inject = ['tools', 'systemPrompt']
@@ -16,12 +23,11 @@ const RELAY_RESPONSE_LIMIT = 256 * 1024
 const RELAY_TIMEOUT_MS = 20_000
 const SESSION_ID = /^[A-Za-z0-9]{64}$/u
 
-interface RelayRequest {
-  version: 1
+type RelayRequest = {
   session_id: string
   tool: string
   arguments: Record<string, unknown>
-}
+} & ({ version: 1 } | { version: 2; request_id: SessionRequestId })
 
 /**
  * Sign one read-only tool relay request using the server-shared HMAC contract.
@@ -89,7 +95,15 @@ async function callRelay(tool: string, args: Record<string, unknown>, exec: Tool
   if (sessionId === undefined || !SESSION_ID.test(sessionId)) {
     return JSON.stringify({ error: { code: 'session_unavailable', message: 'This Agent session is not connected to a Lain42 account.' } })
   }
-  const request: RelayRequest = { version: 1, session_id: sessionId, tool, arguments: args }
+  let request: RelayRequest = { version: 1, session_id: sessionId, tool, arguments: args }
+  const agent = exec.agent
+  if (agent?.ctx !== undefined && scopeOf(agent.ctx) !== undefined) {
+    const policy = agent.ctx.get('sessionProjections')?.stateOf(agent.session, 'lain42RequestPolicy')
+    if (policy === undefined || policy.requestId === null || !permitsLain42Tool(policy, tool)) {
+      return JSON.stringify({ error: { code: 'tool_scope_denied', message: 'This tool is not permitted for the current request.' } })
+    }
+    request = { version: 2, session_id: sessionId, request_id: policy.requestId, tool, arguments: args }
+  }
   const body = Buffer.from(JSON.stringify(request), 'utf8')
   if (body.byteLength > RELAY_BODY_LIMIT) {
     return JSON.stringify({ error: { code: 'invalid_arguments', message: 'The tool request exceeded its size limit.' } })
@@ -271,6 +285,58 @@ export function apply(ctx: Context): void {
       execute: (args, exec) => callRelay('github_actions_logs', args as Record<string, unknown>, exec),
     }),
   ]
-  const disposers = registration.map(tool => ctx.tools.register(tool))
-  ctx.effect(() => () => { for (const dispose of disposers.reverse()) dispose() }, 'Lain42 account tools')
+  const definitions = new Map(registration.map(tool => [tool.name, tool] as const))
+  const disposers = new Map<string, () => void>()
+  const select = (policy: Lain42RequestPolicy | undefined, diagnostic = false): void => {
+    for (const [toolName, definition] of definitions) {
+      const capability = toolName === 'lain42_web_search' ? 'web_search' : toolName.slice('lain42_'.length)
+      if (diagnostic || permitsLain42Tool(policy, capability)) {
+        if (!disposers.has(toolName)) disposers.set(toolName, ctx.tools.register(definition))
+      } else {
+        disposers.get(toolName)?.()
+        disposers.delete(toolName)
+      }
+    }
+  }
+  select(undefined, true)
+  const scope = scopeOf(ctx)
+  if (scope !== undefined) {
+    const projections = ctx.get('sessionProjections')
+    if (projections === undefined) throw new Error('Scoped Lain42 tools require Session projections')
+    ctx.effect(() => projections.register(lain42RequestPolicyProjection), 'Lain42 request policy')
+    if ('session' in scope) {
+      const agent = scope as NonNullable<ToolRunContext['agent']>
+      select(projections.stateOf(agent.session, 'lain42RequestPolicy'))
+    }
+    ctx.tools.restrict({ allow: [] })
+    let preview: Lain42RequestPolicy | undefined
+    ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
+      const committed = projections.stateOf(agent.session, 'lain42RequestPolicy')
+      if (committed === undefined || committed.turn !== turn) {
+        preview = undefined
+        select(undefined)
+        return
+      }
+      const current = committed.kind === 'idle' && preview?.turn === turn ? preview : committed
+      preview = claimLain42RequestPolicy(current, message)
+      select(preview)
+    })
+    ctx.on('agent/status', ({ status }) => {
+      if (status === 'idle') {
+        preview = undefined
+        select(undefined)
+      }
+    })
+    ctx.tools.guard((exec) => {
+      if (!definitions.has(exec.name)) return 'The current request does not permit this tool.'
+      const agent = exec.agent
+      const policy = agent === undefined ? undefined : projections.stateOf(agent.session, 'lain42RequestPolicy')
+      const capability = exec.name === 'lain42_web_search' ? 'web_search' : exec.name.slice('lain42_'.length)
+      return permitsLain42Tool(policy, capability) ? undefined : 'The current request does not permit this tool.'
+    })
+  }
+  ctx.effect(() => () => {
+    for (const dispose of [...disposers.values()].reverse()) dispose()
+    disposers.clear()
+  }, 'Lain42 account tools')
 }

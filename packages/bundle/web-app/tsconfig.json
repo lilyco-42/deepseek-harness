@@ -9,6 +9,15 @@
   ],
   "references": [
     {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/scope"
+    },
+    {
+      "path": "../../session/session-projection"
+    },
+    {
       "path": "../../../vendor/cordis"
     },
     {

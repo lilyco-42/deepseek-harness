@@ -33,13 +33,21 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Generate request-policy dependency lock for review
+        run: pnpm install --lockfile-only --ignore-scripts
+      - name: Upload generated dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: request-policy-lock-${{ github.sha }}
+          path: pnpm-lock.yaml
+          if-no-files-found: error
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
       - name: Generate cancellation contract references
         run: |
           pnpm run gen-cordis-catalog
           pnpm run gen-doc-graphs
-          pnpm run verify-translation-pairing --write docs/event-producer-consumer.md
+          pnpm run gen-module-graph
           pnpm run gen-persistence-catalog
           if [ ! -f docs/persistence-changes/2026-10-03-request-context.md ]; then
             pnpm --silent run persistence-changes --record 2026-10-03-request-context --prose .github/lain42-request-context-prose.json --json
@@ -58,6 +66,9 @@ jobs:
             docs/event-producer-consumer.md
             docs/event-producer-consumer.zh.md
             docs/event-producer-consumer.i18n.yaml
+            docs/module-graph.md
+            docs/module-graph.zh.md
+            docs/module-graph.i18n.yaml
             docs/persistence-schema.json
             docs/persistence-catalog.md
             docs/persistence-catalog.zh.md
@@ -76,6 +87,13 @@ jobs:
           packages/api/session-controller/tests/commands-upload-file.host.spec.ts
           packages/api/session-controller/tests/controller.host.spec.ts
           packages/bundle/web-app/tests/lain42-bridge.spec.ts
+          packages/bundle/web-app/tests/lain42-request-policy.spec.ts
+          packages/bundle/web-app/tests/lain42-tools.spec.ts
+          packages/bundle/web-app/tests/lain42-preset-composition.spec.ts
+      - name: Build and verify shipped request-policy execution
+        run: |
+          pnpm run build
+          pnpm exec vitest run --config vitest.e2e.config.ts apps/cli/tests/profiles/web/tests/lain42-issue-read.expected.e2e.ts apps/cli/tests/profiles/web/tests/lain42-cancellation.expected.e2e.ts
 
   # Three enterprise jobs isolate coverage, static analysis, and the
   # build-backed consumer tail. The consumer job owns the only Linux build so

@@ -42,6 +42,55 @@ afterEach(async () => {
 })
 
 describe('Lain42 private DSH bridge', () => {
+  it.each(['public-only', 'evidence-only', 'account-read'] as const)(
+    'logs signed v3 %s permission with the original request, including optional images', async (toolScope) => {
+      const controller = inactiveSessionController()
+      controller.follow = vi.fn((_request: SessionFollowRequest, _signal: AbortSignal) => answerEvents())
+      const checkpoint = vi.fn(async () => {})
+      const baseUrl = await listen(createLain42BridgeHandler(controller, SECRET, checkpoint, vi.fn()))
+      const withImages = toolScope === 'account-read'
+      const body = jsonBody({ version: 3, sessionId: SESSION_ID, requestId: REQUEST_ID,
+        model: 'composition-model', text: 'Use only the requested sources.', toolScope,
+        ...(withImages ? { images: [{ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }] } : {}),
+      })
+      const result = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, { method: 'POST',
+        headers: signedHeaders(body, currentTimestamp(), nextNonce()), body: Uint8Array.from(body) })
+      expect(result.status).toBe(200)
+      expect(await result.json()).toMatchObject({ requestId: REQUEST_ID })
+      expect(controller.prompt).toHaveBeenCalledWith({
+        sessionId: SESSION_ID, requestId: REQUEST_ID, mode: 'queue',
+        modelSelection: { provider: 'lain42-web', model: 'composition-model' },
+        requestContextDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        requestContext: { lain42: { version: 1, toolScope } },
+        content: [{ type: 'text', text: 'Use only the requested sources.' },
+          ...(withImages ? [{ type: 'image', mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }] : [])],
+      }, expect.any(AbortSignal))
+      expect(checkpoint).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('rejects missing or unknown v3 permissions and permission fields on legacy wire before admission', async () => {
+    const controller = inactiveSessionController()
+    const baseUrl = await listen(createLain42BridgeHandler(controller, SECRET, vi.fn(), vi.fn()))
+    const valid = { version: 3, sessionId: SESSION_ID, requestId: REQUEST_ID,
+      model: 'composition-model', text: 'Account-read in text is not permission.' }
+    for (const extra of [
+      {}, { toolScope: '' }, { toolScope: null }, { toolScope: 'write' },
+      { toolScope: ['account-read'] }, { toolScope: 'public-only', images: [] },
+      { toolScope: 'public-only', images: null },
+      { version: 1, toolScope: 'account-read' },
+      { version: 2, toolScope: 'account-read', images: [{ mediaType: 'image/png', data: ONE_PIXEL_PNG_BASE64 }] },
+    ]) {
+      const body = jsonBody({ ...valid, ...extra })
+      const result = await fetch(`${baseUrl}${LAIN42_BRIDGE_PATH}`, { method: 'POST',
+        headers: signedHeaders(body, currentTimestamp(), nextNonce()), body: Uint8Array.from(body) })
+      expect(result.status).toBe(400)
+      expect(await result.json()).toEqual({ error: 'invalid_request' })
+    }
+    expect(controller.create).not.toHaveBeenCalled()
+    expect(controller.prompt).not.toHaveBeenCalled()
+  })
+
   it.each(['removed', 'not-active', 'not-found', 'unsupported', 'cancellation-requested'] as const)(
     'returns the original-request %s receipt without claiming terminal settlement', async (status) => {
       const receipt = status === 'cancellation-requested'

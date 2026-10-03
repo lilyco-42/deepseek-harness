@@ -111,7 +111,7 @@ it('settles queued and active Stops, protects a newer turn and never re-executes
       ALL_PROXY: undefined,
     },
   }
-  const turn = { version: 1, sessionId: SESSION, requestId: FIRST, model: MODEL, text: 'Cancel this original task.' }
+  const turn = { version: 3, toolScope: 'public-only', sessionId: SESSION, requestId: FIRST, model: MODEL, text: 'Cancel this original task.' }
   await withDefaultWeb(test, async ({ url }) => {
     const denied = await signedPost(url, LAIN42_CANCEL_PATH, { version: 1, sessionId: SESSION, requestId: FIRST }, test.signal, 'invalid-secret')
     expect(denied.status).toBe(401)

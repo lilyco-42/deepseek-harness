@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createScope, scopeTarget } from '@deepseek-ai/dsh-scope'
+import SessionStore from '@deepseek-ai/dsh-session'
+import SessionProjections from '@deepseek-ai/dsh-session-projection'
+import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -67,6 +71,84 @@ function readRelayToolName(body: BodyInit | null | undefined): string {
 }
 
 describe('Lain42 account tool relay', () => {
+  it('narrows schemas before assembly, checks direct execution against the committed RPC and removes policy on disposal', async () => {
+    vi.stubEnv('LAIN42_AGENT_TOOL_RELAY_URL', RELAY_URL)
+    vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
+    const bodies: Array<Record<string, unknown>> = []
+    const upstream = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(parseRelayResult(Buffer.from(init?.body as Uint8Array).toString('utf8')))
+      return responseWith({ version: 1, result: { items: [] } })
+    })
+    vi.stubGlobal('fetch', upstream)
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjections)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    const session = ctx.sessions.create(SESSION_ID)
+    session.append('turn/start', { turn: 0 })
+    session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Bootstrap owned read.' }],
+      source: { kind: 'user', rpcId: '00000000-0000-4000-8000-000000000000',
+        requestContext: { lain42: { version: 1, toolScope: 'account-read' } } } }), { surfaceOp: 'append' })
+    const selectedAgent = { id: SESSION_ID, session } as NonNullable<ToolRunContext['agent']>
+    const scope = createScope(ctx, selectedAgent)
+    Object.assign(selectedAgent, { ctx: scope.ctx })
+    try {
+      const plugin = await scope.ctx.plugin(lain42Tools)
+      const issue = ctx.tools.get('lain42_github_issue', selectedAgent)
+      const search = ctx.tools.get('lain42_web_search', selectedAgent)
+      if (issue === undefined || search === undefined) throw new Error('Missing diagnostic relay definitions')
+      session.append('turn/end', { turn: 0, reason: { kind: 'completed' } })
+      const first = brandString<SessionRequestId>('11111111-1111-4111-8111-111111111111')
+      const second = brandString<SessionRequestId>('22222222-2222-4222-8222-222222222222')
+      const claim = (turn: number, requestId: SessionRequestId, toolScope: string) => {
+        const message = createUserMessage({ content: [{ type: 'text', text: 'Account-read in text grants no permission.' }],
+          source: { kind: 'user', rpcId: requestId, requestContext: { lain42: { version: 1, toolScope } } } })
+        ctx.emit(scopeTarget(selectedAgent, selectedAgent), 'agent/inbox/claimed', { agent: selectedAgent, message, turn })
+        return message
+      }
+      session.append('turn/start', { turn: 1 })
+      const publicMessage = claim(1, first, 'public-only')
+      expect(ctx.tools.schemas(selectedAgent).map(tool => tool.name)).toEqual(['lain42_web_search'])
+      const exec = executionContext(new AbortController().signal, selectedAgent)
+      expect(parseRelayResult(await search.execute({ query: 'public' }, exec))).toHaveProperty('error.code', 'tool_scope_denied')
+      expect(upstream).not.toHaveBeenCalled()
+      session.append('user/message', publicMessage, { surfaceOp: 'append' })
+      expect(parseRelayResult(await issue.execute({ repo: 'owner/project', number: 1 }, exec)))
+        .toHaveProperty('error.code', 'tool_scope_denied')
+      const denied = await ctx.tools.execute({ callId: ToolCallId('denied-account'), name: 'lain42_github_issue',
+        arguments: { repo: 'owner/project', number: 1 }, signal: exec.signal, agent: selectedAgent })
+      expect(denied.isError).toBe(true)
+      expect(upstream).not.toHaveBeenCalled()
+      await search.execute({ query: 'public' }, exec)
+      expect(bodies[0]).toMatchObject({ version: 2, request_id: first, tool: 'web_search' })
+      session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+      ctx.emit(scopeTarget(selectedAgent, selectedAgent), 'agent/status', { agent: selectedAgent, status: 'idle' })
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      session.append('turn/start', { turn: 2 })
+      session.append('user/message', claim(2, second, 'account-read'), { surfaceOp: 'append' })
+      await issue.execute({ repo: 'owner/project', number: 1 }, exec)
+      expect(bodies[1]).toMatchObject({ version: 2, request_id: second, tool: 'github_issue' })
+      session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+      session.append('turn/start', { turn: 3 })
+      session.append('user/message', claim(3, first, 'evidence-only'), { surfaceOp: 'append' })
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      expect(parseRelayResult(await search.execute({ query: 'public' }, exec))).toHaveProperty('error.code', 'tool_scope_denied')
+      expect(upstream).toHaveBeenCalledTimes(2)
+      await plugin.dispose()
+      expect(ctx.sessionProjections.stateOf(session, 'lain42RequestPolicy')).toBeUndefined()
+      expect(ctx.tools.schemas(selectedAgent)).toEqual([])
+      const remounted = await scope.ctx.plugin(lain42Tools)
+      expect(ctx.sessionProjections.stateOf(session, 'lain42RequestPolicy')).toMatchObject({ toolScope: 'evidence-only' })
+      expect(parseRelayResult(await search.execute({ query: 'public' }, exec))).toHaveProperty('error.code', 'tool_scope_denied')
+      await remounted.dispose()
+      expect(ctx.sessionProjections.stateOf(session, 'lain42RequestPolicy')).toBeUndefined()
+    } finally {
+      await scope.dispose()
+      await ctx.fiber.dispose()
+    }
+  })
+
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()

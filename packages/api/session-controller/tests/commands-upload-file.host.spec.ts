@@ -528,7 +528,7 @@ describe('Session file uploads', () => {
     onTestFinished(async () => {
       admitted.resolve([])
       try { await pending }
-      catch (error) { /* An early test failure can release admission without image bytes. */ }
+      catch { /* An early test failure can release admission without image bytes. */ }
       finally { await ctx.fiber.dispose() }
     })
     await vi.waitFor(() => { expect(saveImages).toHaveBeenCalledOnce() })

@@ -339,7 +339,10 @@ export interface SessionPromptRequest {
   readonly modelSelection?: ModelSelection
   /** SHA-256 digest of execution context outside prompt content and model selection. */
   readonly requestContextDigest?: string
-  /** Opaque application metadata, snapshotted before admission and bound to request identity. Must contain no secrets; does not grant capabilities by itself. */
+  /**
+   * Opaque application metadata, snapshotted before admission and bound to request identity.
+   * Must contain no secrets; does not grant capabilities by itself.
+   */
   readonly requestContext?: JsonValue
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]

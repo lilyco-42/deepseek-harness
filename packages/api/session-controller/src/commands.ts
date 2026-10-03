@@ -826,7 +826,7 @@ function snapshotPromptRequestContext(value: JsonValue | undefined): JsonValue |
   let bounded = false
   try {
     bounded = snapshot !== undefined && Buffer.byteLength(JSON.stringify(snapshot), 'utf8') <= 8192
-  } catch (error) {
+  } catch {
     // Deep JSON can exceed the encoder's recursion limit; reject it without admitting work.
   }
   if (!bounded) {

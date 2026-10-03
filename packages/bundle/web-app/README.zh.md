@@ -72,6 +72,10 @@ Lain42 私有对话路由仅在 Session store 的持久化检查点成功后确�
 
 ### Lain42 私有控制面接口
 
+第 3 版对话请求必须带有封闭集合中的 `toolScope`：`public-only` 仅允许公开搜索，`evidence-only` 不允许中继工具，`account-read` 允许预设列出的只读能力。可选图片沿用第 2 版限制。第 1、2 版请求拒绝权限字段，不会悄悄忽略它。签名权限作为有界应用元数据与原始 RPC 一起写入日志；同一请求标识改用其他权限或省略权限会冲突。提示词和工具参数均不能授予权限。
+
+仅在宿主机可见的 `lain42RequestPolicy` 投影从已提交的 Session 事件推导当前开放轮次的确切 RPC。输入被认领后、模型组装前收窄工具 schema；实际执行独立检查已提交的投影，包括仍持有的工具定义。同一轮次出现另一个冲突 RPC 时拒绝执行。轮次结束清空权限，会话重启可重放恢复，插件释放会移除投影与工具注册。作用域内的中继请求使用第 2 版并携带该确切 `request_id`；New API 必须在读取凭据或发起 HTTP 前独立检查所有权、请求接纳、取消与权限。旧版对话调用者保留既有只读权限和不可变请求标识；新增受限调用者要求双方版本匹配。
+
 账号工具 `lain42_github_issue` 通过 New API 按仓库和编号读取指定 Issue，包括已关闭 Issue。它返回最多 12 KiB 的正文及最多三条最早评论（每条 2 KiB），并标明截断和评论读取失败。浏览器预读与模型选择的详情读取共用同一个 New API 读取器。OAuth token 留在 New API，DSH 只收到读取的内容；该工具不读取仓库源码，也不发布 Issue 回复或修改代码。
 
 `enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本，以及由 New API 选择的必填模型 ID；`general`、`coding`、`research`、`content` 模式可以省略，省略时使用 `general`。缺少模型 ID 的请求会被拒绝，不会回退到 DSH 进程级默认模型。v2 请求还可以携带最多 4 张 PNG、JPEG、WebP 或 GIF 图片，解码后合计不超过 8 MiB；图片会先通过 DSH 现有的附件校验，再进入模型请求。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，不支持流式传输或任意二进制附件。
