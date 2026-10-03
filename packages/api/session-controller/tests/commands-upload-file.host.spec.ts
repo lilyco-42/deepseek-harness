@@ -461,6 +461,28 @@ describe('Session file uploads', () => {
     expect(selectForNextRequest).toHaveBeenCalledOnce()
   })
 
+  it('logs application request context and rejects permission changes on the same identity', async () => {
+    const { controller, followup } = await uploadHarness()
+    const request = {
+      ...promptRequest([{ type: 'text', text: 'Read public sources only.' }]),
+      requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
+    }
+    await controller.prompt(request)
+    expect((followup.mock.calls[0]?.[0] as UserMessage).source).toMatchObject({
+      kind: 'user',
+      requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
+    })
+    const changed = {
+      ...request,
+      requestContext: { lain42: { version: 1, toolScope: 'account-read' } },
+    }
+    await expect(controller.prompt(changed)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
   it('rejects malformed context digests and unserved prompt model selections before delivery', async () => {
     const { controller, followup, selectForNextRequest } = await uploadHarness()
     const base = promptRequest([{ type: 'text', text: 'valid prompt' }])
