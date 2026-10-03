@@ -121,7 +121,9 @@ it('returns exact issue evidence to model continuation and replays the recorded 
       const modelRequest = JSON.parse(requestBody) as { tools: Array<{ function: { name: string } }> }
       expect(modelRequest.tools.map(tool => tool.function.name)).toEqual(['lain42_web_search'])
     }
-    expect(modelRequests[1]).toContain('unknown tool')
+    expect((JSON.parse(modelRequests[1]!) as { messages: unknown[] }).messages).toContainEqual({
+      role: 'tool', tool_call_id: 'read-1', content: 'Error: The current request does not permit this tool.',
+    })
     expect(modelRequests[2]).toContain(PUBLIC_URL)
     expect(await signedTurn(url, { ...publicTurn, toolScope: 'account-read' }, test.signal)).toMatchObject({ status: 409 })
     expect(toolRequests).toHaveLength(1)
@@ -144,7 +146,9 @@ it('returns exact issue evidence to model continuation and replays the recorded 
       const modelRequest = JSON.parse(requestBody) as { tools?: unknown[] }
       expect(modelRequest.tools ?? []).toEqual([])
     }
-    expect(modelRequests[6]).toContain('unknown tool')
+    expect((JSON.parse(modelRequests[6]!) as { messages: unknown[] }).messages).toContainEqual({
+      role: 'tool', tool_call_id: 'read-6', content: 'Error: The current request does not permit this tool.',
+    })
     // Read while the process is still alive: disposal must not provide the barrier.
     const sessionRoot = join(options.home, 'sessions')
     const logs = (await readdir(sessionRoot, { recursive: true })).filter(path => path.endsWith('.jsonl.zstd'))

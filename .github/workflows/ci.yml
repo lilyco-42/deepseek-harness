@@ -95,6 +95,14 @@ jobs:
         run: |
           pnpm run build
           pnpm exec vitest run --config vitest.expected.config.ts apps/cli/tests/profiles/web/tests/lain42-issue-read.expected.e2e.ts apps/cli/tests/profiles/web/tests/lain42-cancellation.expected.e2e.ts
+      - name: Verify request-policy owner coverage
+        run: >-
+          pnpm exec vitest run --coverage
+          --coverage.include=packages/bundle/web-app/src/lain42-request-policy.ts
+          --coverage.include=packages/bundle/web-app/src/lain42-tools.ts
+          packages/bundle/web-app/tests/lain42-request-policy.spec.ts
+          packages/bundle/web-app/tests/lain42-tools.spec.ts
+          packages/bundle/web-app/tests/lain42-preset-composition.spec.ts
 
   # Three enterprise jobs isolate coverage, static analysis, and the
   # build-backed consumer tail. The consumer job owns the only Linux build so
