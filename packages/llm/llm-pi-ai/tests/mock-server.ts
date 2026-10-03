@@ -14,7 +14,13 @@ const servers: Server[] = []
 
 /** Close every server opened since the last call; run from each spec's afterEach. */
 export async function closeMockServers(): Promise<void> {
-  await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))))
+  await Promise.all(servers.splice(0).map(server => new Promise((resolve) => {
+    server.close(resolve)
+    // A failed cancellation assertion can leave a deliberately open streaming
+    // response behind. Destroy connections after stopping new accepts so the
+    // test cleanup cannot hang on that failed transport.
+    server.closeAllConnections()
+  })))
 }
 
 /** A minimal complete text generation in pi-ai's chat-completions shape. */
@@ -31,6 +37,7 @@ export async function mockServer(script: {
   events?: string[]
   body?: string
   delayMs?: number
+  holdOpen?: boolean
   headers?: Record<string, string>
 }[]): Promise<MockServer> {
   const paths: string[] = []
@@ -66,6 +73,7 @@ export async function mockServer(script: {
         const event = behavior.events?.[index++]
         if (event === undefined) { response.end(); return }
         response.write(`data: ${event}\n\n`)
+        if (behavior.holdOpen) return
         if (behavior.delayMs === undefined) writeNext()
         else setTimeout(writeNext, behavior.delayMs)
       }

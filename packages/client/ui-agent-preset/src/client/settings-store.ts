@@ -127,9 +127,9 @@ export async function beginRosterRead<S extends { status: string; error: string 
  * @returns one option per selectable preset, in roster order.
  */
 export function presetOptions(
-  presets: readonly { id: string; name?: string; description?: string; broken?: string }[],
+  presets: readonly { id: string; name?: string; description?: string; userSelectable?: boolean; broken?: string }[],
 ): AgentPresetOption[] {
-  return presets.filter(preset => preset.broken === undefined).map(preset => ({
+  return presets.filter(preset => preset.userSelectable !== false && preset.broken === undefined).map(preset => ({
     id: preset.id,
     ...preset.name === undefined ? {} : { name: preset.name },
     ...preset.description === undefined ? {} : { description: preset.description },

@@ -17,8 +17,10 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import * as AppBoot from '@deepseek-ai/dsh-app-boot'
 import { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import type { LlmRequestHeadersResolver } from '@deepseek-ai/dsh-llm'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import { apply, Config, internals } from '../src/index.ts'
+import { LAIN42_AGENT_MODEL_PROVIDER } from '../src/lain42-model-relay.ts'
 
 vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
@@ -112,6 +114,45 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it('preserves existing model headers and adds Lain42 relay headers only for its provider', async () => {
+    stageDist()
+    vi.stubEnv('LAIN42_AGENT_MODEL_RELAY_SECRET', 'test-only-model-relay-secret-with-32-bytes')
+    const request = { provider: LAIN42_AGENT_MODEL_PROVIDER, model: 'deepseek-chat', sessionId: 'a'.repeat(64) }
+    const unrelated = { provider: 'other-provider', model: 'model' }
+
+    const composeHeaders = (existing: LlmRequestHeadersResolver | undefined): LlmRequestHeadersResolver => {
+      let resolver: LlmRequestHeadersResolver | undefined
+      apply({
+        webServer: { host: '127.0.0.1', port: 4567 },
+        get: () => existing,
+        provide: (name: string, value: LlmRequestHeadersResolver) => {
+          if (name === 'llmRequestHeaders') resolver = value
+        },
+        plugin: (..._args: unknown[]) => undefined,
+        inject: (..._args: unknown[]) => undefined,
+      } as never, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] }))
+      if (resolver === undefined) throw new Error('web-app did not provide the combined model header resolver')
+      return resolver
+    }
+
+    const relayOnlyResolver = composeHeaders(undefined)
+    expect(await relayOnlyResolver.resolve(request)).toMatchObject({
+      'x-lain42-agent-session': request.sessionId,
+      'x-lain42-agent-model': request.model,
+    })
+
+    const existingResolver: LlmRequestHeadersResolver = {
+      resolve: input => ({ 'x-existing-provider': input.provider }),
+    }
+    const combinedResolver = composeHeaders(existingResolver)
+    expect(await combinedResolver.resolve(unrelated)).toEqual({ 'x-existing-provider': 'other-provider' })
+    expect(await combinedResolver.resolve(request)).toMatchObject({
+      'x-existing-provider': LAIN42_AGENT_MODEL_PROVIDER,
+      'x-lain42-agent-session': request.sessionId,
+      'x-lain42-agent-model': request.model,
+    })
+  })
+
   it('mounts dist serving, prompt section, bash variables, and publishes the URL with the LAN snapshot', async () => {
     stageDist()
     const ctx = new Context()

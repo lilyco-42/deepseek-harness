@@ -235,7 +235,7 @@ describe('web e2e: experimental Auto and Full access confirmation', () => {
     expect(await input.textContent()).toBe('/permission')
     await input.press('Enter')
     await slash.waitFor()
-    expect(await slash.getByRole('option').count()).toBe(3)
+    await expect.poll(() => slash.getByRole('option').count()).toBe(3)
     expect(await slash.getByText('Auto review', { exact: true }).count()).toBe(0)
     await page.keyboard.press('Escape')
     await access.click()

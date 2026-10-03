@@ -1,0 +1,40 @@
+name: Lain42 overlay
+
+on:
+  push:
+    branches: [lain42-agent]
+    paths:
+      - 'apps/cli/config/examples/lain42/**'
+      - '.github/workflows/lain42-overlay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build Harness
+        run: pnpm run build
+      - name: Verify Lain42 composition without a real credential
+        env:
+          LAIN42_MODEL: ci-model
+          LAIN42_API_KEY: ci-placeholder
+        run: |
+          pnpm dsh web --patch apps/cli/config/examples/lain42/cordis.patch.yml --dump-config > /tmp/lain42-config.yml
+          grep -q 'provider: lain42' /tmp/lain42-config.yml
+          grep -q 'apiKeyEnv: LAIN42_API_KEY' /tmp/lain42-config.yml
+          grep -q 'mode: DISABLED' /tmp/lain42-config.yml
+          grep -q 'enabled: false' /tmp/lain42-config.yml
+      - name: Exercise the headless Agent against a local mock gateway
+        run: node apps/cli/config/examples/lain42/smoke.mjs

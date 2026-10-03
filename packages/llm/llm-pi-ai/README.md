@@ -29,6 +29,8 @@ Mount this plugin when a composition routes model requests through pi-ai's provi
 
 The adapter accepts the LLM service's [request-only user inputs](../llm/README.md#use-this-package) alongside durable history. User identity and attribution do not enter pi-ai content; assistant replay metadata and tool-call correlation remain attached to durable messages.
 
+Deployments may provide the optional `llmRequestHeaders` service to resolve transport headers per request from the selected provider, model, and opaque session id. The pi-ai adapter merges these with profile headers while keeping Harness attribution headers reserved. This seam is suitable for a hosting gateway that must bind model usage to an authenticated session; it does not put identity into prompt content or provider settings.
+
 ### When to choose it
 
 Choose this adapter when the same composition serves several providers, when a route needs pi-ai's catalog defaults with a few fields corrected, or when a hand-declared gateway must be reached through its own endpoint and protocol. Choose `dsh-llm-deepseek` for the direct DeepSeek route when the deployment needs no other provider. Both adapters can be mounted together because their route names do not collide; registering a route another adapter already owns fails plugin loading.

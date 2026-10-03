@@ -1,7 +1,8 @@
 /**
  * Newline-delimited JSON-RPC 2.0 over byte streams. Frames with `id` and
  * `method` are requests, `id` alone is a response, and `method` alone is a
- * notification. Malformed lines are ignored; handler failures become error frames.
+ * notification. `$/cancelRequest` aborts a peer's pending request handler.
+ * Malformed lines are ignored; handler failures become error frames.
  *
  * @module @deepseek-ai/dsh-sdk-protocol/transport
  */
@@ -11,7 +12,7 @@ import type { Readable, Writable } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
 
 type JsonRpcId = string | number
-type RequestHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>
+type RequestHandler = (method: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>
 type NotificationHandler = (method: string, params: Record<string, unknown>) => void
 
 /** A JSON-RPC error response, preserving the wire `code` and optional `data`. */
@@ -39,7 +40,7 @@ export interface JsonRpcTransportPeer {
    * @returns the result; rejects with {@link JsonRpcResponseError} on an error
    * response, and with a plain `Error` on a write failure or closure.
    */
-  request(method: string, params: object): Promise<unknown>
+  request(method: string, params: object, signal?: AbortSignal): Promise<unknown>
   /**
    * Send a notification; omitted params produce no `params` member.
    * @param method - the JSON-RPC method name.
@@ -66,6 +67,7 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
   private requestHandler: RequestHandler | undefined
   private notificationHandler: NotificationHandler | undefined
   private readonly pending = new Map<JsonRpcId, PendingRequest>()
+  private readonly incoming = new Map<JsonRpcId, AbortController>()
 
   constructor(
     private readonly input: Readable,
@@ -89,12 +91,13 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
     this.input.off('error', this.onInputError)
     this.input.off('end', this.onInputEnd)
     this.failPending(new Error('JSON-RPC transport closed'))
+    this.failIncoming(new Error('JSON-RPC transport closed'))
   }
 
   /**
    * Install the request handler, replacing any prior handler.
    * @param handler - resolves to the response `result`; a rejection becomes a
-   * `-32603` error response carrying the message.
+   * `-32603` error response carrying the message, or `-32800` when cancelled.
    */
   onRequest(handler: RequestHandler): void {
     this.requestHandler = handler
@@ -130,6 +133,9 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
         }
         const onAbort = (): void => {
           this.pending.delete(id)
+          // JSON-RPC requests are bidirectional. Let the peer stop work that
+          // is blocked inside this request (for example, a pending approval UI).
+          try { this.notify('$/cancelRequest', { id }) } catch { /* the local abort remains authoritative */ }
           reject(abortError(signal.reason))
         }
         signal.addEventListener('abort', onAbort, { once: true })
@@ -190,12 +196,14 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
 
   private readonly onInputError = (error: Error): void => {
     this.failPending(error)
+    this.failIncoming(error)
   }
 
   private readonly onInputEnd = (): void => {
     this.buffer += this.decoder.end()
     this.drainLines()
     this.failPending(new Error('JSON-RPC input closed'))
+    this.failIncoming(new Error('JSON-RPC input closed'))
   }
 
   private async handleLine(line: string): Promise<void> {
@@ -219,7 +227,15 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
       return
     }
     if (typeof method === 'string') {
-      this.notificationHandler?.(method, objectParams(frame.params))
+      const params = objectParams(frame.params)
+      if (method === '$/cancelRequest') {
+        const requestId = params.id
+        if (typeof requestId === 'string' || typeof requestId === 'number') {
+          this.incoming.get(requestId)?.abort(new Error('JSON-RPC request cancelled by peer'))
+        }
+        return
+      }
+      this.notificationHandler?.(method, params)
     }
   }
 
@@ -229,11 +245,20 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
       this.writeError(id, -32601, `method not found: ${method}`)
       return
     }
+    const controller = new AbortController()
+    this.incoming.set(id, controller)
     try {
-      const result = await handler(method, params)
-      this.write({ jsonrpc: '2.0', id, result })
+      const result = await handler(method, params, controller.signal)
+      if (controller.signal.aborted) {
+        this.writeError(id, -32800, 'request cancelled')
+      } else {
+        this.write({ jsonrpc: '2.0', id, result })
+      }
     } catch (error) {
-      this.writeError(id, -32603, error instanceof Error ? error.message : String(error))
+      this.writeError(id, controller.signal.aborted ? -32800 : -32603,
+        controller.signal.aborted ? 'request cancelled' : error instanceof Error ? error.message : String(error))
+    } finally {
+      if (this.incoming.get(id) === controller) this.incoming.delete(id)
     }
   }
 
@@ -265,6 +290,12 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
     const pending = [...this.pending.values()]
     this.pending.clear()
     for (const waiter of pending) waiter.reject(error)
+  }
+
+  private failIncoming(error: Error): void {
+    const controllers = [...this.incoming.values()]
+    this.incoming.clear()
+    for (const controller of controllers) controller.abort(error)
   }
 }
 

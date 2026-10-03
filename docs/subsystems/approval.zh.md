@@ -81,6 +81,8 @@ interface ApprovalRequest extends ApprovalRequestEvent {
 }
 ```
 
+stdio SDK 客户端可以通过宿主回调应答此请求。SDK 适配器只转发所属会话 ID、工具名、可选调用 ID 和理由；工具参数与凭据留在运行时内。宿主返回一个闭合结果，并可在会话取消时撤回尚未处理的问题。传输约定见 [SDK 客户端](../../packages/sdk/client/README.zh.md)和[线协议](../../packages/sdk/protocol/README.zh.md)。
+
 ## 分发与审计
 
 `ctx.approval.request(req)` 要求发起请求的会话处于一个尚未结束的轮次内。它追加 `approval/asked`，获取一个结果，追加对应的 `approval/decided`，然后以该结果完成。`never` 策略在服务内部、waterfall 分发之前强制执行，因此即使后来以 `prepend` 注册的应答者也无法绕过它。应答者在负责处理该请求时返回结果，否则调用 `next()` 委托；第一个应答占据唯一的决策槽位。

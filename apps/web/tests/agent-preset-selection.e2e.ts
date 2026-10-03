@@ -269,6 +269,15 @@ describe('web e2e: agent-preset selection', () => {
 
   it('names every preset and what it is for', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-agent-preset-menu'))
+    const shipped = ['standard', 'ptc', 'minimal', 'cordis']
+    const roster = await scaffold.ctx.agentPresets.remoteExportList()
+    const shippedRows = roster.presets.filter(preset => shipped.includes(preset.id) && preset.userSelectable !== false)
+    expect(shippedRows.map(preset => preset.id).sort()).toEqual([...shipped].sort())
+    const broken = shippedRows
+      .filter(preset => preset.broken !== undefined)
+      .map(({ id, broken: reason }) => ({ id, reason }))
+    expect(broken).toEqual([])
+
     await page.getByRole('button', { name: 'Standard mode' }).click()
     const menu = page.getByRole('menu')
     await menu.waitFor({ timeout: 10_000 })

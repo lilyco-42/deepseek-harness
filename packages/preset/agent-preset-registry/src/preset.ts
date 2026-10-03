@@ -6,6 +6,8 @@ export interface AgentPreset {
   readonly name?: string
   readonly description?: string
   readonly order?: number
+  /** Whether ordinary user-facing preset pickers and settings should expose this preset. */
+  readonly userSelectable?: boolean
   readonly broken?: string
 }
 

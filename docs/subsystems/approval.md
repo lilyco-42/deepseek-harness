@@ -81,6 +81,8 @@ interface ApprovalRequest extends ApprovalRequestEvent {
 }
 ```
 
+The stdio SDK client can answer this request through a host callback. The SDK adapter forwards only the owning session id, tool name, optional call id, and reason; tool arguments and credentials stay in the runtime. The host returns one closed outcome and can withdraw a pending question when the session is cancelled. See the [SDK client](../../packages/sdk/client/README.md) and [wire protocol](../../packages/sdk/protocol/README.md) for the transport contract.
+
 ## Dispatch and audit
 
 `ctx.approval.request(req)` requires the requesting session to be inside an open turn. It appends `approval/asked`, obtains one outcome, appends the matching `approval/decided`, and resolves with that outcome. The `never` policy is enforced inside the service before waterfall dispatch, so even an answerer registered later with `prepend` cannot bypass it. Answerers return an outcome when they own the request or call `next()` to delegate; the first answer occupies the single decision slot.

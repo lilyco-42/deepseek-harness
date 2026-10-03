@@ -1289,12 +1289,17 @@ describe('first-use Workspace preparation', () => {
 
   it('rejects a relative candidate before creating its directory', async () => {
     const h = await firstUse()
-    const candidate = join(h.directoryRoot, 'relative')
-    h.resolveDirectory.mockResolvedValueOnce({ path: relative(process.cwd(), candidate), title: 'Workspace' })
-    await expect(h.registry.initializeDefault(h.resolveDirectory)).rejects.toThrow('fully qualified')
-    await expect(realpath(candidate)).rejects.toMatchObject({ code: 'ENOENT' })
-    expect(h.registry.list()).toEqual([])
-    expect(storedState(h.pool).defaultWorkspaceId).toBeUndefined()
+    const candidateRoot = await mkdtemp(join(process.cwd(), '.dsh-workspace-relative-'))
+    const candidate = join(candidateRoot, 'workspace')
+    try {
+      h.resolveDirectory.mockResolvedValueOnce({ path: relative(process.cwd(), candidate), title: 'Workspace' })
+      await expect(h.registry.initializeDefault(h.resolveDirectory)).rejects.toThrow('fully qualified')
+      await expect(realpath(candidate)).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(h.registry.list()).toEqual([])
+      expect(storedState(h.pool).defaultWorkspaceId).toBeUndefined()
+    } finally {
+      await rm(candidateRoot, { recursive: true, force: true })
+    }
   })
 
   it('keeps the initialization marker across deletion and restart', async () => {

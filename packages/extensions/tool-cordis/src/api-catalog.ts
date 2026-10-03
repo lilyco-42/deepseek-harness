@@ -1827,8 +1827,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'selectModel\') selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue>',
-        description: 'Select one Session-local model after explicitly resuming the Session.',
-        parameters: [{ name: 'request', description: 'Session identity and requested model selection.' }],
+        description: 'Select one Session-local model and optionally save it as the deployment default.',
+        parameters: [{ name: 'request', description: 'Session identity, requested model, and default-persistence choice.' }],
         returns: 'the normalized selection installed for the Session.',
       },
       {
@@ -1898,6 +1898,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Cancel one active Agent turn without dropping its pending inbox.',
         parameters: [{ name: 'request', description: 'Session whose active Agent turn is cancelled.' }],
         returns: 'acknowledgement that cancellation was requested.',
+      },
+      {
+        signature: '@Remote(\'cancelPrompt\') cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue>',
+        description: 'Cancel only work belonging to one original accepted prompt.',
+        parameters: [{ name: 'request', description: 'Session and original prompt identity.' }],
+        returns: 'admitted action, not a claim of completed turn settlement.',
       },
       {
         signature: '@Remote(\'page\') page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage>',
@@ -3698,7 +3704,7 @@ export const EVENT_API: readonly EventApiEntry[] = [
     mode: 'waterfall',
     signature: '\'agent/request\'(this: Scoped<Agent>, payload: { agent: Agent; turn: number; step: number; signal: AbortSignal }, next: () => Promise<LlmCallConfig>): Promise<LlmCallConfig>',
     summary: 'Replace the frozen call configuration.',
-    description: 'Replace the frozen call configuration. `await next()` yields the config the machine would use (agent options on the first request, the logged header afterwards); return a replacement to switch. On step admission, this runs after assembly and `step/start`, before the system prompt and accepted user batch are committed. Cancellation here or during subsequent `prepareCall()` resolution commits neither. The prepared call capability governs prompt admission. Model-visible content must use logged channels; this waterfall cannot mutate messages.',
+    description: 'Replace the frozen call configuration. `await next()` yields the config the machine would use (agent options on the first request, the logged header afterwards); return a replacement to switch. On step admission, this runs after assembly and `step/start`, before the system prompt and accepted user batch are committed. Cancellation here or during subsequent `prepareCall()` resolution commits no system prompt; claimed inbox input is recorded only when cancellation used `keepInbox`, without generated pre-step context. The prepared call capability governs prompt admission. Model-visible content must use logged channels; this waterfall cannot mutate messages.',
     parameters: [{ name: 'payload', description: '.signal - the current turn\'s explicit abort signal. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
   },
   {
@@ -4303,7 +4309,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AgentPresetRow',
-    declaration: 'export interface AgentPresetRow {\n    readonly id: string;\n    readonly isDefault: boolean;\n    readonly name?: string;\n    readonly description?: string;\n    readonly broken?: string;\n}',
+    declaration: 'export interface AgentPresetRow {\n    readonly id: string;\n    readonly isDefault: boolean;\n    readonly name?: string;\n    readonly description?: string;\n    readonly userSelectable?: boolean;\n    readonly broken?: string;\n}',
   },
   {
     name: 'AgentResolver',
@@ -5723,7 +5729,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PresetDefinition',
-    declaration: 'export interface PresetDefinition {\n    readonly id: string;\n    readonly name?: string;\n    readonly description?: string;\n    readonly order?: number;\n    readonly plugins: readonly (Omit<EntryOptions, \'id\' | \'disabled\'> & {\n        id?: string;\n        disabled?: EntryOptions[\'disabled\'] | JsExpr;\n    })[];\n}',
+    declaration: 'export interface PresetDefinition {\n    readonly id: string;\n    readonly name?: string;\n    readonly description?: string;\n    readonly order?: number;\n    readonly userSelectable?: boolean;\n    readonly plugins: readonly (Omit<EntryOptions, \'id\' | \'disabled\'> & {\n        id?: string;\n        disabled?: EntryOptions[\'disabled\'] | JsExpr;\n    })[];\n}',
   },
   {
     name: 'PresetOption',
@@ -6118,12 +6124,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionAvailability = \'live\' | \'persisted\';',
   },
   {
+    name: 'SessionCancelPromptRequest',
+    declaration: 'export interface SessionCancelPromptRequest {\n    readonly sessionId: SessionId;\n    readonly requestId: SessionRequestId;\n}',
+  },
+  {
+    name: 'SessionCancelPromptValue',
+    declaration: 'export type SessionCancelPromptValue = {\n    readonly accepted: true;\n    readonly status: \'removed\' | \'not-active\' | \'not-found\' | \'unsupported\';\n} | {\n    readonly accepted: true;\n    readonly status: \'cancellation-requested\';\n    readonly turn: number;\n};',
+  },
+  {
     name: 'SessionCancelRequest',
-    declaration: 'export interface SessionCancelRequest {\n    readonly sessionId: SessionId;\n}',
+    declaration: 'export interface SessionCancelRequest {\n    readonly sessionId: SessionId;\n    readonly turn?: number;\n}',
   },
   {
     name: 'SessionCancelValue',
-    declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n}',
+    declaration: 'export interface SessionCancelValue {\n    readonly accepted: true;\n    readonly cancelled?: boolean;\n}',
   },
   {
     name: 'SessionControlBaseline',
@@ -6399,7 +6413,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionPromptRequest',
-    declaration: 'export interface SessionPromptRequest {\n    readonly requestId: SessionRequestId;\n    readonly sessionId: SessionId;\n    readonly mode: \'queue\' | \'steer\';\n    readonly content: readonly PromptContentPart[];\n    readonly clientTimeZone?: string;\n}',
+    declaration: 'export interface SessionPromptRequest {\n    readonly requestId: SessionRequestId;\n    readonly sessionId: SessionId;\n    readonly mode: \'queue\' | \'steer\';\n    readonly modelSelection?: ModelSelection;\n    readonly requestContextDigest?: string;\n    readonly requestContext?: JsonValue;\n    readonly content: readonly PromptContentPart[];\n    readonly clientTimeZone?: string;\n}',
   },
   {
     name: 'SessionPromptValue',
@@ -6471,7 +6485,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionSelectModelRequest',
-    declaration: 'export interface SessionSelectModelRequest extends ModelSelection {\n    readonly sessionId: SessionId;\n}',
+    declaration: 'export interface SessionSelectModelRequest extends ModelSelection {\n    readonly sessionId: SessionId;\n    readonly persistDefault?: boolean;\n}',
   },
   {
     name: 'SessionSelectModelValue',

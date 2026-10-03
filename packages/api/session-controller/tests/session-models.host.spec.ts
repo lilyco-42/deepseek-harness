@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
@@ -132,6 +132,26 @@ async function harness(logged?: {
     ctx,
     inbox: { nextTurn: [], nextStep: [] },
   } as unknown as Agent
+  const factory: AgentFactory = {
+    async createAgent(_ownerCtx, options) {
+      const createdSession = ctx.sessions.create(
+        options.sessionId,
+        options.meta === undefined ? {} : { meta: options.meta },
+      )
+      const createdAgent: Agent = {
+        ...agent,
+        id: createdSession.id,
+        session: createdSession,
+      }
+      await options.setup?.(ctx, createdAgent)
+      const unregister = await ctx.agents.register(createdAgent)
+      return { agent: createdAgent, dispose: async () => { await unregister() } }
+    },
+    async resume() {
+      throw new Error('test harness has no persisted sessions')
+    },
+  }
+  ctx.agents.setFactory(factory)
   await ctx.agents.register(agent)
   return { ctx, agent, sessionId: session.id }
 }
@@ -595,6 +615,37 @@ describe('Web session model selection', () => {
     await ctx.fiber.dispose()
   })
 
+  it('keeps an externally scoped model selection out of the deployment default', async () => {
+    const { ctx, sessionId } = await harness()
+    const saved: unknown[] = []
+    const deploymentDefault = { provider: 'deepseek-official', model: 'deepseek-chat' }
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => deploymentDefault,
+      saveDefaultModelSelection: (selection) => {
+        saved.push(selection)
+      },
+      cwd: '/tmp',
+    })
+
+    expectValue(await remote.selectModel(request({
+      sessionId,
+      provider: 'deepseek-official',
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'max',
+      persistDefault: false,
+    })))
+    expect(saved).toEqual([])
+    expect(currentSelection(ctx, sessionId)).toEqual({
+      provider: 'deepseek-official',
+      model: 'deepseek-reasoner',
+      reasoningEffort: 'max',
+    })
+
+    const nextSession = expectValue(await remote.create({}))
+    expect(currentSelection(ctx, nextSession.sessionId)).toEqual(deploymentDefault)
+    await ctx.fiber.dispose()
+  })
+
   it('refuses a prompt no adapter can route, and reports it on the directory', async () => {
     const { ctx, sessionId } = await harness()
     const remote = createSessionTestRemote(ctx, {
@@ -734,6 +785,51 @@ describe('Web session model selection', () => {
     }))).toMatchObject({
       ok: false,
       error: { code: 'session/model-unavailable', message: 'string selection failure' },
+    })
+
+    const promptContent = [{ type: 'text' as const, text: 'route this prompt' }]
+    expectValue(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'image-capable', model: 'vision' },
+    })))
+    expectValue(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: {
+        provider: 'deepseek-official',
+        model: 'deepseek-chat',
+        reasoningEffort: ReasoningEffortId('high'),
+      },
+    })))
+    expect(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'metadata-broken', model: 'broken' },
+    }))).toMatchObject({
+      ok: false,
+      error: { code: 'session/model-unavailable', message: 'reasoning metadata offline' },
+    })
+    expect(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'string-error', model: 'broken' },
+    }))).toMatchObject({
+      ok: false,
+      error: { code: 'session/model-unavailable', message: 'string selection failure' },
+    })
+    expect(await remote.prompt(promptRequest({
+      sessionId,
+      mode: 'queue',
+      content: promptContent,
+      modelSelection: { provider: 'remote-rejected', model: 'rejected' },
+    }))).toMatchObject({
+      ok: false,
+      error: { code: 'gateway/internal', message: 'fixture rejected the selection' },
     })
     await ctx.fiber.dispose()
   })

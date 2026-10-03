@@ -8,7 +8,9 @@ import { PassThrough, type Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
+import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
 import * as acp from '../src/index.ts'
@@ -28,11 +30,43 @@ import { spawnSubprocess } from '@deepseek-ai/dsh-subprocess-local/src/spawn.ts'
 
 const mockServer = fileURLToPath(new URL('./mock-acp-server.ts', import.meta.url))
 
-/** A parent Agent stub. The ACP backend reads exactly one thing off it: the session header's cwd (the workspace its child inherits). */
-const fakeParent = { id: 'parent', session: { header: { cwd: process.cwd() } } } as unknown as Agent
+/** Parent Agent stub with a real Session so approval requests are durably audited. */
+const parentId = SessionId('parent')
+const parentSession = Session.create(
+  parentId,
+  [{ type: 'turn/start', seq: SessionSeq(0), time: Date.now(), data: { turn: 1 } }],
+  { ...Session.create(parentId).header, cwd: process.cwd() },
+)
+const fakeInbox: Inbox = {
+  nextTurn: [],
+  nextStep: [],
+  clear() {},
+  append() {},
+  prepend() {},
+  replace() { return false },
+  remove() { return false },
+  splice() { return [] },
+}
+const fakeParent = {
+  id: parentId,
+  session: parentSession,
+  options: {},
+  inbox: fakeInbox,
+  status: 'idle',
+  ctx: new Context(),
+  cancel() {},
+  whenIdle: async () => {},
+  runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>) {
+    return task(new AbortController().signal)
+  },
+  send() {},
+  followup() {},
+  steer() {},
+  inject() {},
+} satisfies Agent
 
-function request(text = 'p', signal = new AbortController().signal) {
-  return { prompt: [{ type: 'text' as const, text }], parent: fakeParent, signal }
+function request(text = 'p', signal = new AbortController().signal, parent = fakeParent) {
+  return { prompt: [{ type: 'text' as const, text }], parent, signal }
 }
 
 interface SetupEnv {
@@ -42,13 +76,14 @@ interface SetupEnv {
 
 /**
  * Mount the ACP backend pointed at the mock server, scripted by `mockEnv`.
- * `permission` selects the backend's auto-answer policy.
+ * `permission` selects the backend's permission policy.
  */
-async function setup(mockEnv: SetupEnv = {}, permission: 'allow' | 'reject' = 'reject') {
+async function setup(mockEnv: SetupEnv = {}, permission: 'allow' | 'ask' | 'reject' = 'reject', approval = false) {
   const ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SubagentRuntime)
   await ctx.plugin(LocalSubprocessRuntime)
+  if (approval) await ctx.plugin(ApprovalService)
   await ctx.plugin(acp, {
     providerName: 'acp',
     command: process.execPath,
@@ -67,8 +102,8 @@ function expectedFailure(fields: string): string {
   return `Subagent failure (provider: ACP; ${fields})`
 }
 
-function expectedPermission(policy: 'allow' | 'reject', requestKind: string, decision: 'allowed' | 'denied'): string {
-  return `ACP unattended decision (policy: ${policy}; request: ${requestKind}; decision: ${decision})`
+function expectedPermission(policy: 'allow' | 'ask' | 'reject', requestKind: string, decision: 'allowed' | 'denied'): string {
+  return `ACP permission decision (policy: ${policy}; request: ${requestKind}; decision: ${decision})`
 }
 
 /**
@@ -1509,6 +1544,116 @@ describe('dsh-subagent-acp', () => {
     expect(deniedResult.diagnostic).toContain(expectedPermission('reject', 'edit', 'denied'))
     expect(deniedResult.diagnostic).not.toContain('policy: allow')
     await Promise.all([allowed.dispose(), denied.dispose()])
+  })
+
+  it('routes ACP permission prompts through the parent session and grants one operation only', async () => {
+    const ctx = await setup({
+      MOCK_PERMISSION: '1',
+      MOCK_TOOL_KIND: 'edit',
+      MOCK_STOP: 'max_turn_requests',
+    }, 'ask', true)
+    const approvalRequests: Array<{ agent: Agent; toolName: string; reason?: string; signal?: AbortSignal }> = []
+    ctx.on('approval/request', (approval) => {
+      approvalRequests.push(approval)
+      return Promise.resolve<ApprovalOutcome>('allowed-once')
+    })
+
+    const run = await ctx.subagents.start('acp', request())
+    const result = await run.result
+    await run.dispose()
+
+    expect(approvalRequests).toHaveLength(1)
+    expect(approvalRequests[0]?.agent).toBe(fakeParent)
+    expect(approvalRequests[0]).toMatchObject({
+      toolName: 'ACP edit',
+      reason: 'The ACP worker requests permission to perform the edit operation.',
+    })
+    expect(approvalRequests[0]?.signal).toBeInstanceOf(AbortSignal)
+    const parentEvents = parentSession.snapshotEvents()
+    expect(parentEvents.slice(-2).map(event => event.type)).toEqual(['approval/asked', 'approval/decided'])
+    expect(parentEvents.at(-1)?.data).toMatchObject({ outcome: 'allowed-once' })
+    expect(result.diagnostic).toContain(expectedPermission('ask', 'edit', 'allowed'))
+  })
+
+  it.each(['rejected', 'cancelled', 'unavailable', 'throws'] as const)(
+    'denies ACP operations when approval returns %s', async (outcome) => {
+      const requestApproval = vi.fn(async (): Promise<ApprovalOutcome> => {
+        if (outcome === 'throws') throw new Error('approval unavailable')
+        return outcome
+      })
+      const run = await startAcpRun(request(), {
+        command: process.execPath,
+        args: [mockServer],
+        cwd: process.cwd(),
+        permission: 'ask',
+        requestApproval,
+        env: { MOCK_PERMISSION: '1', MOCK_TOOL_KIND: 'edit', MOCK_STOP: 'max_turn_requests' },
+        disposeEofGraceMs: DEFAULT_DISPOSE_EOF_GRACE_MS,
+        disposeGraceMs: DEFAULT_DISPOSE_GRACE_MS,
+        spawn: spawnSubprocess,
+      })
+      try {
+        const result = await run.result
+        expect(requestApproval).toHaveBeenCalledTimes(1)
+        expect(result.diagnostic).toContain(expectedPermission('ask', 'edit', 'denied'))
+        expect(result.diagnostic).not.toContain('decision: allowed')
+      } finally {
+        await run.dispose()
+      }
+    },
+  )
+
+  it('describes an unspecified ACP operation to the parent without granting it', async () => {
+    const ctx = await setup({ MOCK_PERMISSION: '1', MOCK_STOP: 'max_turn_requests' }, 'ask', true)
+    const reasons: Array<string | undefined> = []
+    ctx.on('approval/request', (approval) => {
+      reasons.push(approval.reason)
+      return Promise.resolve<ApprovalOutcome>('rejected')
+    })
+    const run = await ctx.subagents.start('acp', request())
+    try {
+      const result = await run.result
+      expect(reasons).toEqual(['The ACP worker requests permission to perform the requested operation.'])
+      expect(result.diagnostic).toContain(expectedPermission('ask', 'unknown', 'denied'))
+    } finally {
+      await run.dispose()
+    }
+  })
+
+  it('fails closed when no parent approval service is available', async () => {
+    const ctx = await setup({
+      MOCK_PERMISSION: '1',
+      MOCK_TOOL_KIND: 'execute',
+      MOCK_STOP: 'max_turn_requests',
+    }, 'ask')
+
+    const run = await ctx.subagents.start('acp', request())
+    const result = await run.result
+    await run.dispose()
+
+    expect(result.diagnostic).toContain(expectedPermission('ask', 'execute', 'denied'))
+    expect(result.diagnostic).not.toContain('decision: allowed')
+  })
+
+  it('does not convert a one-operation approval into an ACP allow-always grant', async () => {
+    const ctx = await setup({
+      MOCK_PERMISSION: '1',
+      MOCK_ALLOW_ALWAYS_ONLY: '1',
+      MOCK_TOOL_KIND: 'edit',
+      MOCK_STOP: 'max_turn_requests',
+    }, 'ask', true)
+    const questions = vi.fn()
+    ctx.on('approval/request', (approval) => {
+      questions(approval)
+      return Promise.resolve<ApprovalOutcome>('allowed-once')
+    })
+
+    const run = await ctx.subagents.start('acp', request())
+    const result = await run.result
+    await run.dispose()
+
+    expect(questions).not.toHaveBeenCalled()
+    expect(result.diagnostic).toContain(expectedPermission('ask', 'edit', 'denied'))
   })
 
   it('wraps a teardown rejection with safe facts and keeps the raw cause in Host diagnostics', async () => {

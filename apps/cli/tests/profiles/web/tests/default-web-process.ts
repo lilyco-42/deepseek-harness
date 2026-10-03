@@ -22,12 +22,26 @@ interface DefaultWeb {
   request: (command: 'roster' | 'mount-experimental' | 'mount-experimental-entry') => Promise<RuntimeRoster>
 }
 
+/** Test-owned overlays and credentials; omitted options retain default Web startup. */
+interface WebProcessOptions {
+  patches?: readonly string[]
+  env?: NodeJS.ProcessEnv
+  home?: string
+  cwd?: string
+  onMessage?: (message: unknown) => void
+}
+
 /**
  * Boot the built Web profile under plain Node and dispose it to quiescence after an assertion callback.
  * @param test - owning Vitest case, including its timeout, cancellation, and cleanup hooks.
  * @param inspect - assertions against the running process and its ephemeral loopback URL.
+ * @param options - opt-in overlays, environment and persistence root owned by this test.
  */
-export async function withDefaultWeb(test: TestContext, inspect: (app: DefaultWeb) => Promise<void>): Promise<void> {
+export async function withDefaultWeb(
+  test: TestContext,
+  inspect: (app: DefaultWeb) => Promise<void>,
+  options: WebProcessOptions = {},
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-web-default-isolation-'))
   let removal: Promise<void> | undefined
   const removeRoot = (): Promise<void> => removal ??= rm(root, { recursive: true, force: true })
@@ -53,22 +67,27 @@ export async function withDefaultWeb(test: TestContext, inspect: (app: DefaultWe
     const launch = resolveExampleLaunch({
       srcBin: join(repoRoot, 'apps/cli/src/bin.ts'),
       mode: 'lib',
-      configArgs: ['--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0', '--no-open'],
+      configArgs: [
+        '--profile', 'web', '--patch', patch,
+        ...(options.patches ?? []).flatMap(path => ['--patch', path]),
+        '--host', '127.0.0.1', '--port', '0', '--no-open',
+      ],
       env: {
         NODE_OPTIONS: undefined,
         NODE_PATH: undefined,
         TSX_TSCONFIG_PATH: undefined,
-        DSH_HOME: join(root, 'home'),
+        DSH_HOME: options.home ?? join(root, 'home'),
         DSH_AGENTS_HOME: join(root, '.agents'),
         DSH_TELEMETRY_DISABLED: '1',
         DEEPSEEK_API_KEY: 'keyless-default-web-no-call',
         NODE_NO_WARNINGS: '1',
+        ...options.env,
       },
     })
     test.signal.throwIfAborted()
     const args = ['--no-experimental-strip-types', ...launch.args]
     const child = spawn(launch.command, args, {
-      cwd: root,
+      cwd: options.cwd ?? root,
       env: { ...process.env, ...launch.env },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     })
@@ -92,6 +111,7 @@ export async function withDefaultWeb(test: TestContext, inspect: (app: DefaultWe
     })
     child.once('disconnect', () => { rejectPending(new Error(`Web IPC disconnected\n${stdout}\n${stderr}`)) })
     child.on('message', (message: { command?: string; roster?: RuntimeRoster; error?: string }) => {
+      options.onMessage?.(message)
       if (message.command === undefined) return
       const request = pending.get(message.command)
       if (request === undefined) return

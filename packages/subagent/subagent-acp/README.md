@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to delegate a task to an ACP-compatible agent running in a fresh subprocess with its own runtime, session, model, and tools. Each run shares only the selected working directory, sends the task over ACP, and returns the child's final answer or a safe error; intermediate messages and tool traffic stay outside the parent conversation. Permission prompts are answered by configured policy without human interaction. Choose it when delegation needs process isolation or a non-Harness ACP agent, and choose an in-process backend when the child must share parent capabilities.
+Use this package to delegate a task to an ACP-compatible agent running in a fresh subprocess with its own runtime, session, model, and tools. Each run shares only the selected working directory, sends the task over ACP, and returns the child's final answer or a safe error; intermediate messages and tool traffic stay outside the parent conversation. Permission prompts can be rejected, automatically answered by an explicit policy, or routed to the parent session's approval UI. Choose it when delegation needs process isolation or a non-Harness ACP agent, and choose an in-process backend when the child must share parent capabilities.
 
 ## Table of Contents
 
@@ -39,12 +39,16 @@ Choose this backend when the child must run with its own runtime, model, and too
 | `command` | required | Executable spawned for each run (the child ACP agent) |
 | `args` | `[]` | Command arguments |
 | `cwd` | parent session cwd | Working-directory override for the child process and its ACP session |
-| `permission` | `reject` | Auto-answer permission requests by rejecting, or choosing the first `allow_once` or `allow_always` option (`allow`) |
+| `permission` | `reject` | `reject` declines prompts; `allow` chooses the first `allow_once` or `allow_always`; `ask` requests parent-session approval and accepts only `allow_once` |
 | `env` | `{}` | Explicit child environment layered over the credential-scrubbed parent environment |
 | `disposeEofGraceMs` | `6000` | Grace after stdin EOF before platform termination |
 | `disposeGraceMs` | `3000` | Bound for observing structured process facts after failure and, on POSIX, the SIGTERM-to-SIGKILL grace |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-acp) is the exhaustive source for every accepted field and its JSDoc.
+
+The `ask` policy uses the composed `dsh-user-approval` service to show the request in the parent session. If the service, an answerer, or an ACP `allow_once` option is unavailable, the child request is cancelled.
+
+This is not a sandbox: the parent can mediate only permission requests the ACP child sends. It cannot restrict a child that runs tools without asking.
 
 A DeepSeek Harness child uses the product launcher and an explicit absolute `DSH_HOME`. The isolated home prevents a nested runtime from discovering the launching person's profiles or credentials; the generic ACP provider does not impose this requirement on non-DSH agents.
 
@@ -160,7 +164,7 @@ These limits define when this backend is a poor fit or needs special operational
 - **Local workspaces only** — the resolved working directory is a local path handed to a child on the same machine; remote workspace mapping is not designed.
 - **No optional start-time capabilities** — this provider cannot apply `agentOptions`, `outputSchema`, a depth cap, a tool filter, or a persona inside the remote process, so the seam rejects requests that require them.
 - **Only committed `agent_message_chunk` text is collected** — the automation server keeps reasoning, tool activity, plans, and other trace data in the child session log rather than emitting them on ACP.
-- **Permission prompts are auto-answered** (`permission: allow | reject`) — no human is surfaced a child's `session/request_permission`.
+- **Approval UI belongs to the parent session** — `permission: ask` forwards only the closed ACP operation kind to `dsh-user-approval`; child titles and option text are not trusted or displayed, and only an ACP `allow_once` option can be selected.
 
 <a id="dev-note"></a>
 ### Dev Note

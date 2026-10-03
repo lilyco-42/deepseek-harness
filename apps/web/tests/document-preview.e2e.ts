@@ -353,7 +353,8 @@ async function expectExcelPanning(page: Page, excel: Locator): Promise<void> {
     await expect.poll(offset).toEqual({ x: before.x + dx, y: before.y + dy })
   }
   expect(await excel.locator('.fortune-name-box').innerText()).toBe(selection)
-  await wheel(-10000, -10000)
+  const beforeEdge = await offset()
+  await wheel(-beforeEdge.x, -beforeEdge.y)
   await expect.poll(offset).toEqual({ x: 0, y: 0 })
   await wheel(-20, 20)
   await expect.poll(offset).toEqual({ x: 0, y: 20 })

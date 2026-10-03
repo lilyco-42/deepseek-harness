@@ -296,6 +296,8 @@ export interface SessionCreateValue {
 /** Session model-selection request. */
 export interface SessionSelectModelRequest extends ModelSelection {
   readonly sessionId: SessionId
+  /** Save this selection as the deployment default for Sessions without a logged choice. Defaults to true. */
+  readonly persistDefault?: boolean
 }
 
 /** Accepted model selection after Host resolution. */
@@ -329,10 +331,19 @@ export interface SessionForkValue {
 
 /** Session prompt request. */
 export interface SessionPromptRequest {
-  /** Client-minted identity persisted on the exact accepted user message. */
+  /** Client-minted identity persisted with the accepted message; changed retries using it are rejected. */
   readonly requestId: SessionRequestId
   readonly sessionId: SessionId
   readonly mode: 'queue' | 'steer'
+  /** Optional model route resolved and applied only when this request is newly admitted. */
+  readonly modelSelection?: ModelSelection
+  /** SHA-256 digest of execution context outside prompt content and model selection. */
+  readonly requestContextDigest?: string
+  /**
+   * Opaque application metadata, snapshotted before admission and bound to request identity.
+   * Must contain no secrets; does not grant capabilities by itself.
+   */
+  readonly requestContext?: JsonValue
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]
   readonly clientTimeZone?: string
@@ -370,12 +381,28 @@ export interface SessionUpdateQueueValue {
 /** Active-turn cancellation request. */
 export interface SessionCancelRequest {
   readonly sessionId: SessionId
+  /** Optional durable turn identity; stale scoped cancellation is a no-op. */
+  readonly turn?: number
 }
 
 /** Receipt after cancellation is admitted to the live Agent. */
 export interface SessionCancelValue {
   readonly accepted: true
+  /** Present only for a turn-scoped cancellation request. */
+  readonly cancelled?: boolean
 }
+
+/** Target one accepted prompt without cancelling unrelated queued or newer work. */
+export interface SessionCancelPromptRequest {
+  readonly sessionId: SessionId
+  /** Original client-minted prompt identity, not a replacement request id. */
+  readonly requestId: SessionRequestId
+}
+
+/** A cancellation request is not proof that an executing turn has finished. */
+export type SessionCancelPromptValue =
+  | { readonly accepted: true; readonly status: 'removed' | 'not-active' | 'not-found' | 'unsupported' }
+  | { readonly accepted: true; readonly status: 'cancellation-requested'; readonly turn: number }
 
 /** Request to open one path prepared by a Session-aware caller on the Host desktop. */
 export interface SessionOpenWorkspacePathRequest {
@@ -397,8 +424,14 @@ export type SessionRequestId = Branded<'session-request-id'>
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    /** Browser prompt correlation and optional Host-validated time zone. */
-    'user-rpc': { kind: 'user'; rpcId: SessionRequestId; clientTimeZone?: string }
+    /** Browser prompt correlation, replay digest, opaque application metadata, and optional Host-validated time zone. */
+    'user-rpc': {
+      kind: 'user'
+      rpcId: SessionRequestId
+      requestDigest?: string
+      requestContext?: JsonValue
+      clientTimeZone?: string
+    }
   }
 }
 

@@ -33,23 +33,28 @@ Wire one JSON-RPC 2.0 message per `\n`-terminated line over byte streams you own
 
 ### The SDK methods
 
-Both wire ends share one method set: three client-to-server requests and four server-to-client notifications.
+Both wire ends share one method set: five client-to-server requests, one server-to-client approval request, and four server-to-client notifications.
 
 | Direction | Method | Payload types |
 |---|---|---|
 | client→server | `initialize` | `InitializeParams` → `InitializeResult` |
 | client→server | `session/prompt` | `SessionPromptParams` → `SessionPromptResult` (durable enqueue receipt) |
+| client→server | `session/cancel` | `SessionCancelParams` → `{}` (requests user cancellation for the session) |
+| client→server | `session/close` | `SessionCloseParams` → `{}` (disposes the live SDK agent; a later prompt reopens its durable history) |
 | client→server | `shutdown` | no params → `{}` |
+| server→client | `approval/request` | `SdkApprovalRequestParams` → `SdkApprovalRequestResult` (one-shot human decision) |
 | server→client | `session.event` | `SessionEventNotification` (every session in the runtime, unfiltered) |
 | server→client | `session.status` | `SessionStatusNotification` (whole-agent `running`/`idle` transition) |
 | server→client | `subagent.started` | `SubagentStartedNotification` |
 | server→client | `subagent.finished` | `SubagentFinishedNotification` (in-process runs only) |
 
-`HarnessSdkRequestMap` and `HarnessSdkNotificationMap` index these shapes by method name; the package root exports them together with the transport.
+`HarnessSdkRequestMap`, `HarnessSdkHostRequestMap`, and `HarnessSdkNotificationMap` index these shapes by method name; the package root exports them together with the transport.
+
+Closing a session releases only its live agent. Durable history remains available, and a later prompt using the same id opens it again.
 
 ### Payload semantics
 
-`SessionPromptResult.messageId` identifies the queued user message; it does not identify a later assistant message, turn ending, or prompt result. `SdkPromptContentBlock` accepts ordinary durable content plus `SdkEncodedImageBlock { type: "image", data, mimeType }`; the server converts encoded images to durable references before enqueue. `InitializeParams.reasoningEffort` is an optional non-empty adapter-owned identifier for the selected provider/model route; omission preserves that model's default. `InitializeParams.maxTokens` is an optional positive safe integer that caps each conversation-model output for SDK-created agents and their in-process descendants; omission lets the selected adapter's exact-model default apply. The server resolves the exact route during initialization and rejects `session/prompt` until that handshake succeeds, so a missing adapter, unavailable model, or unsupported effort cannot fall back to constructor defaults. `SubagentFinishedNotification.lastAssistantMessage` carries the child's last non-empty assistant message, or its accumulated assistant text when no such message exists; the field is absent when the child produced neither. `serverInfo.name` stays the wire-stable `deepseek-harness-sdk-runtime`. Notification payloads depend on `SessionEvent` (`dsh-session`), `ContentBlock` (`dsh-llm`), and `SubagentStopReason` (`dsh-subagent`), so the session vocabulary is part of the wire contract.
+`SessionPromptResult.messageId` identifies the queued user message; it does not identify a later assistant message, turn ending, or prompt result. `session/cancel` requests user cancellation but does not wait for activity to settle; observe `session.status` for the later idle transition. `session/close` disposes the live SDK agent while leaving durable session data and the runtime available. `approval/request` carries only the owning session, tool name, optional call id, and tool-supplied reason; it never copies tool arguments or credentials. The host must return one of `allowed-once`, `rejected`, `cancelled`, or `unavailable`; omission, malformed replies, and callback failures fail closed. When activity is cancelled, `$/cancelRequest` aborts the host handler so pending approval UI can be dismissed. `SdkPromptContentBlock` accepts ordinary durable content plus `SdkEncodedImageBlock { type: "image", data, mimeType }`; the server converts encoded images to durable references before enqueue. `InitializeParams.reasoningEffort` is an optional non-empty adapter-owned identifier for the selected provider/model route; omission preserves that model's default. `InitializeParams.maxTokens` is an optional positive safe integer that caps each conversation-model output for SDK-created agents and their in-process descendants; omission lets the selected adapter's exact-model default apply. The server resolves the exact route during initialization and rejects `session/prompt` until that handshake succeeds, so a missing adapter, unavailable model, or unsupported effort cannot fall back to constructor defaults. `SubagentFinishedNotification.lastAssistantMessage` carries the child's last non-empty assistant message, or its accumulated assistant text when no such message exists; the field is absent when the child produced neither. `serverInfo.name` stays the wire-stable `deepseek-harness-sdk-runtime`. Notification payloads depend on `SessionEvent` (`dsh-session`), `ContentBlock` (`dsh-llm`), and `SubagentStopReason` (`dsh-subagent`), so the session vocabulary is part of the wire contract.
 
 -----
 
@@ -111,8 +116,8 @@ None; this package neither assembles nor sends a provider request.
 These limits define what the protocol does not cover or promise. They are current package constraints, not a comparison with other wire formats or a task backlog.
 
 - **No protocol-version negotiation** — the handshake carries only `serverInfo.version` (`0.0.1`, unvalidated by clients); pre-release stance, no compatibility promise.
-- **No cancel or session-close methods** — a client abandons a turn by closing the runtime process; see the [JSON-RPC serving plugin](../server/README.md).
-- **Server→client requests are a dead capability** — the transport supports them, but the server never sends one; the Python SDK's responder surface exists for future approval flows.
+- **No prompt result** — cancellation only requests an abort; callers observe later session events and status to determine how activity settled.
+- **Approval presentation is host-owned** — the protocol transports the question and answer but does not provide a UI; hosts without an approval handler return `unavailable`.
 
 <a id="dev-note"></a>
 ### Dev Note

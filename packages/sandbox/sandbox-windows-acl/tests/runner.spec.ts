@@ -528,19 +528,19 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
   }, 30_000)
 
   it('a FullControl open inside a granted root still works for files (the deny inherits to containers only)', () => {
-    // The ambient-delete deny is 0x40, a member of FILE_ALL_ACCESS: inheriting
-    // it onto files would deny every GENERIC_ALL/FullControl open by the user,
-    // Administrators, SYSTEM, or the DSH host. Directories inside a granted
-    // root keep the deny (that is where FILE_DELETE_CHILD is evaluated), so a
-    // FullControl open of a DIRECTORY is the documented cost of the deny.
+    // Probe through the real restricted token: a hosted runner may have
+    // backup/restore privileges that bypass direct host-token directory opens.
+    // Everyone gets FullControl only in this disposable fixture so the
+    // write-restricted token can open files with GENERIC_ALL; the production
+    // deny must still reject that same access on nested directories.
     const granted = join(scratchRoot, 'fullcontrol-root')
     const child = join(granted, 'child')
     mkdirSync(granted)
     mkdirSync(child)
     writeFileSync(join(granted, 'file.txt'), 'x')
     writeFileSync(join(child, 'deep.txt'), 'x')
-    const grant = AclWriteGrant.create(workspaceWriteSid(granted))
-    grant.add(granted, true)
+    const everyoneGrant = spawnSync('icacls', [granted, '/grant', '*S-1-1-0:(OI)(CI)(F)'], { encoding: 'utf8' })
+    expect(everyoneGrant.status, `icacls stdout: ${everyoneGrant.stdout}\nstderr: ${everyoneGrant.stderr}`).toBe(0)
     try {
       const probe = `
 $ErrorActionPreference='SilentlyContinue'
@@ -551,20 +551,29 @@ public static extern IntPtr CreateFileW(string n, uint a, uint s, IntPtr sa, uin
 public static extern bool CloseHandle(IntPtr h);
 '@ | Out-Null
 function TryOpen([string]$label, [string]$path) {
+  [Console]::Out.WriteLine("TRY: $label")
+  [Console]::Out.Flush()
   $h = [P.F]::CreateFileW($path, 0x10000000, 7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+  [Console]::Out.WriteLine("OPENED: $label")
+  [Console]::Out.Flush()
   if ($h -eq [IntPtr]::new(-1)) { "$($label): DENIED" } else { [void][P.F]::CloseHandle($h); "$($label): OK" }
 }
 TryOpen 'FILE' '${join(granted, 'file.txt')}'
 TryOpen 'NESTED-FILE' '${join(child, 'deep.txt')}'
 TryOpen 'DIRECTORY' '${child}'
 `
-      const result = spawnSync('pwsh', ['-NoLogo', '-NonInteractive', '-NoProfile', '-Command', probe], { encoding: 'utf8', timeout: 60_000 })
-      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+      const result = runRunner([
+        '--workspace', granted, '--temp', isolatedTemp, '--mode', 'workspace-write',
+        '--', 'pwsh', '/NoLogo', '/NonInteractive', '/NoProfile', '/Command', probe,
+      ], 60_000)
+      expect(
+        result.status,
+        `signal: ${result.signal}\nerror: ${result.error?.message ?? 'none'}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+      ).toBe(0)
       expect(result.stdout).toContain('FILE: OK')
       expect(result.stdout).toContain('NESTED-FILE: OK')
       expect(result.stdout).toContain('DIRECTORY: DENIED')
     } finally {
-      grant.dispose()
       rmSync(granted, { recursive: true, force: true })
     }
   }, 60_000)

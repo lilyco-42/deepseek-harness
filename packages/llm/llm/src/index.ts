@@ -55,6 +55,8 @@ export type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.
 declare module '@deepseek-ai/cordis' {
   interface Context {
     llm: LlmRuntime
+    /** Optional deployment-owned headers added to each outbound model request. */
+    llmRequestHeaders?: LlmRequestHeadersResolver
   }
 
   interface Events {
@@ -73,6 +75,19 @@ declare module '@deepseek-ai/cordis' {
     'llm/stream'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>
 
   }
+}
+
+/**
+ * Optional transport seam for deployments that authenticate model calls per
+ * session. It stays separate from provider profiles and credentials so an
+ * adapter need not know the hosting product that owns the identity.
+ */
+export interface LlmRequestHeadersResolver {
+  resolve(input: {
+    provider: string
+    model: string
+    sessionId?: string
+  }): Readonly<Record<string, string>> | undefined | Promise<Readonly<Record<string, string>> | undefined>
 }
 
 /** Structured provider facts and cause accepted by {@link LlmError}. */

@@ -123,6 +123,35 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('resolves host-owned headers for the selected model and session on every request', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const resolved: Array<{ provider: string; model: string; sessionId?: string }> = []
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    ctx.provide('llmRequestHeaders', {
+      resolve(input) {
+        resolved.push(input)
+        return { 'x-lain42-agent-session': input.sessionId ?? 'missing-session' }
+      },
+    })
+    await ctx.plugin(LlmPiAi, {
+      providers: { deepseek: { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } },
+    })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      sessionId: 'server-session-42' as never,
+      messages: [],
+    })
+
+    expect(resolved).toEqual([{
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      sessionId: 'server-session-42',
+    }])
+    expect(server.headers[0]?.['x-lain42-agent-session']).toBe('server-session-42')
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {
@@ -414,17 +443,22 @@ describe('PiAiAdapter provider routing', () => {
   })
 
   it('stops the SDK request when the adapter idle watchdog expires', async () => {
-    const server = await mockServer([{ events: textEvents, delayMs: 200 }])
-    const ctx = await harness(server.url, { streamIdleTimeoutMs: 20 })
+    // Keep the response open after its first event: the server must observe the
+    // client abort, rather than eventually closing its own scripted stream. A
+    // one-second watchdog leaves time for the loopback request to reach the
+    // server on a heavily loaded coverage worker before measuring stream idle.
+    const server = await mockServer([{ events: textEvents, holdOpen: true }])
+    const ctx = await harness(server.url, { streamIdleTimeoutMs: 1_000 })
 
     const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(result.finish).toMatchObject({ kind: 'error', failure: { code: 'TIMEOUT' } })
+    let closeTimeout: ReturnType<typeof setTimeout> | undefined
     await Promise.race([
       server.responseClosed,
       new Promise<never>((_resolve, reject) => {
-        setTimeout(() => { reject(new Error('SDK request did not close after idle timeout')) }, 1_000)
+        closeTimeout = setTimeout(() => { reject(new Error('SDK request did not close after idle timeout')) }, 5_000)
       }),
-    ])
+    ]).finally(() => { if (closeTimeout !== undefined) clearTimeout(closeTimeout) })
 
     expect(server.paths).toEqual(['/chat/completions'])
     expect(server.closedResponses).toBe(1)

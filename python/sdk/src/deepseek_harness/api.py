@@ -117,6 +117,16 @@ class DeepSeekHarness:
         self._client.close()
         self._initialized = False
 
+    def cancel_session(self, session_id: str) -> None:
+        """Cancel current work for a session while keeping the runtime open."""
+        self.start()
+        self._client.session_cancel(session_id)
+
+    def close_session(self, session_id: str) -> None:
+        """Dispose a live agent while keeping its durable history and runtime available."""
+        self.start()
+        self._client.session_close(session_id)
+
     def start_session(self, session_id: str | None = None) -> "Session":
         self.start()
         return Session(self, session_id or f"session-{uuid.uuid4().hex}")
@@ -135,6 +145,14 @@ class Session:
     def __init__(self, harness: DeepSeekHarness, session_id: str) -> None:
         self.harness = harness
         self.id = session_id
+
+    def cancel(self) -> None:
+        """Cancel current work for this session."""
+        self.harness.cancel_session(self.id)
+
+    def close(self) -> None:
+        """Dispose this live agent; a later run can reopen its durable history."""
+        self.harness.close_session(self.id)
 
     def run(
         self,

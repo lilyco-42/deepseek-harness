@@ -152,7 +152,7 @@ export interface Config {
 
 Depends on: `Volatile` (`@deepseek-ai/cordis`)
 
-Source: [`packages/preset/agent-preset-registry/src/preset.ts:13`](../packages/preset/agent-preset-registry/src/preset.ts)
+Source: [`packages/preset/agent-preset-registry/src/preset.ts:15`](../packages/preset/agent-preset-registry/src/preset.ts)
 
 <a id="deepseek-aidsh-agent-tool-presentation"></a>
 
@@ -228,7 +228,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/api/session-controller/src/index.ts:79`](../packages/api/session-controller/src/index.ts)
+Source: [`packages/api/session-controller/src/index.ts:81`](../packages/api/session-controller/src/index.ts)
 
 <a id="deepseek-aidsh-api-settings-controller"></a>
 
@@ -2980,9 +2980,11 @@ export interface Config {
    */
   cwd?: string
   /**
-   * How to auto-answer the child's `session/request_permission` prompts:
-   * `reject` (default — decline every prompt) or `allow` (approve via the first
-   * `allow_once` or `allow_always` option). No prompt is surfaced to a human.
+   * How to answer the child's `session/request_permission` prompts:
+   * `reject` (default) declines every prompt; `allow` picks the first
+   * `allow_once` or `allow_always` option without asking; `ask` routes an
+   * `allow_once` request through the parent session's approval service. If the
+   * service, answerer, or one-shot option is unavailable, the request is denied.
    */
   permission: PermissionPolicy
   /**
@@ -3003,11 +3005,11 @@ export interface Config {
   disposeGraceMs?: number
 }
 
-/** Fixed response to child permission requests: reject by default, or select the first allow option. */
-export type PermissionPolicy = 'allow' | 'reject'
+/** Fixed response to child permission requests: ask the parent user, allow, or reject. */
+export type PermissionPolicy = 'allow' | 'ask' | 'reject'
 ```
 
-Source: [`packages/subagent/subagent-acp/src/index.ts:27`](../packages/subagent/subagent-acp/src/index.ts)
+Source: [`packages/subagent/subagent-acp/src/index.ts:29`](../packages/subagent/subagent-acp/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-claude-code"></a>
 
@@ -3928,10 +3930,12 @@ export interface Config {
   surfaceContext: boolean
   /** Explicit `--trusted-host` authorities from this invocation. */
   trustedHosts: string[]
+  /** Mount the private HMAC-authenticated Lain42 server-to-server turn route. */
+  enableLain42Bridge?: boolean
 }
 ```
 
-Source: [`packages/bundle/web-app/src/index.ts:44`](../packages/bundle/web-app/src/index.ts)
+Source: [`packages/bundle/web-app/src/index.ts:46`](../packages/bundle/web-app/src/index.ts)
 
 <a id="deepseek-aidsh-web-fetch-http"></a>
 
