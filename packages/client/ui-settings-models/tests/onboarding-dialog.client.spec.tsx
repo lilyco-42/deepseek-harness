@@ -137,8 +137,9 @@ function harness(options: {
   }
   // The page plugin's context, scripted down to the namespaces it reaches.
   const ctx = { remote: face } as never
-  const operations = createModelsOperations(ctx)
-  const controller = new ModelsSettingsStore(ctx, settingsSchema, new SettingsDescribeMirror(ctx))
+  const mirror = new SettingsDescribeMirror(ctx)
+  const operations = createModelsOperations(ctx, mirror)
+  const controller = new ModelsSettingsStore(ctx, settingsSchema, mirror)
   const openSection = vi.fn()
   const complete = vi.fn()
   const unusedHook = (() => { throw new Error('unused standard hook') }) as never

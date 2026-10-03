@@ -80,6 +80,11 @@ jobs:
           if-no-files-found: error
       - name: Build required native system dependency
         run: pnpm run build:native-system
+      - name: Verify accepted model settings and owner coverage
+        run: >-
+          pnpm exec vitest run --coverage
+          --coverage.include=packages/client/ui-settings-models/src/client/operations.ts
+          packages/client/ui-settings-models/tests
       - name: Verify original-request cancellation and replay
         run: >-
           pnpm exec vitest run

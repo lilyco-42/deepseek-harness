@@ -230,10 +230,10 @@ function ctxWith(face: object): PageContext {
  * otherwise re-probe on every render.
  */
 const operations = new WeakMap<object, ModelsOperations>()
-function operationsWith(face: object): ModelsOperations {
+function operationsWith(face: object, mirror = new SettingsDescribeMirror(ctxWith(face))): ModelsOperations {
   const existing = operations.get(face)
   if (existing !== undefined) return existing
-  const bound = createModelsOperations(ctxWith(face))
+  const bound = createModelsOperations(ctxWith(face), mirror)
   operations.set(face, bound)
   return bound
 }
@@ -270,7 +270,7 @@ async function mountFace(scripted: ReturnType<typeof scriptedFace>) {
   const injected: ModelsSectionProps = {
     controller,
     useSnapshot: bindSnapshotSelector(controller.store),
-    operations: operationsWith(face),
+    operations: operationsWith(face, mirror),
     schema: settingsSchema,
     t,
     renderSlot: renderSlot as unknown as ModelsSectionProps['renderSlot'],
@@ -308,6 +308,43 @@ async function mountDeepSeekCard(overrides: Parameters<typeof scriptedFace>[0] =
 }
 
 describe('ModelsSection', () => {
+  it('reopens from the accepted namespace before a pushed settings refresh', async () => {
+    const prior = wireNamespaces()[2]!
+    const providers = { openai: { apiKeyEnv: 'OPENAI_API_KEY', baseURL: 'https://saved.example/v1' } }
+    const committed: SettingsNamespaceView = {
+      ...prior, value: { providers }, user: { providers }, revision: 1,
+    }
+    const mutate = vi.fn(() => Promise.resolve(remoteOk(committed)))
+    const { face, mirror, controller } = await mountSection({ mutate })
+    await act(async () => {
+      const outcome = await operationsWith(face, mirror).writeSettings('llm-pi-ai', [{
+        op: 'set', path: ['providers', 'openai', 'baseURL'], value: 'https://saved.example/v1',
+      }], 0)
+      expect(outcome).toEqual({ kind: 'written', view: committed })
+      await controller.load()
+    })
+    expect(mirror.getSnapshot().view?.namespaces.find(view => view.ns === 'llm-pi-ai')).toEqual(committed)
+    expect(controller.store.getSnapshot().namespaces.get('llm-pi-ai')).toEqual(committed)
+    expect(face.settings.describe).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: providerCopy(en.editProvider, { provider: 'openai', displayName: 'openai' }) }))
+    fireEvent.click(screen.getByText(en.customized))
+    expect(screen.getByLabelText<HTMLInputElement>(en.baseUrl).value).toBe('https://saved.example/v1')
+  })
+
+  it.each(['settings/rejected', 'settings/conflict'] as const)('keeps the held namespace when a write returns %s', async (code) => {
+    const mutate = vi.fn(() => Promise.resolve(remoteFail('write not committed', code)))
+    const { face, mirror, controller } = await mountSection({ mutate })
+    const before = mirror.getSnapshot().view
+    const outcome = await operationsWith(face, mirror).writeSettings('llm-pi-ai', [{
+      op: 'set', path: ['providers', 'openai', 'baseURL'], value: 'https://uncommitted.example/v1',
+    }], 0)
+    expect(outcome).toEqual({ kind: code === 'settings/conflict' ? 'conflict' : 'refused', message: 'write not committed' })
+    await act(async () => { await controller.load() })
+    expect(mirror.getSnapshot().view).toBe(before)
+    expect(controller.store.getSnapshot().namespaces.get('llm-pi-ai')).toEqual(wireNamespaces()[2])
+    expect(face.settings.describe).toHaveBeenCalledOnce()
+  })
+
   it('hides the add action when no settings namespace can open an editor', async () => {
     const scripted = scriptedFace()
     scripted.face.settings.describe.mockResolvedValue(remoteOk({ writable: true, hasDocument: false, namespaces: [] }))
