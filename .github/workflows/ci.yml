@@ -54,6 +54,7 @@ jobs:
           fi
           pnpm run verify-translation-pairing --write packages/bundle/web-app/README.md
           pnpm run verify-translation-pairing --write packages/api/session-controller/README.md
+          pnpm run verify-translation-pairing --write docs/event-producer-consumer.md
       - name: Upload generated cancellation references
         uses: actions/upload-artifact@v4
         with:
@@ -93,7 +94,7 @@ jobs:
       - name: Build and verify shipped request-policy execution
         run: |
           pnpm run build
-          pnpm exec vitest run --config vitest.e2e.config.ts apps/cli/tests/profiles/web/tests/lain42-issue-read.expected.e2e.ts apps/cli/tests/profiles/web/tests/lain42-cancellation.expected.e2e.ts
+          pnpm exec vitest run --config vitest.expected.config.ts apps/cli/tests/profiles/web/tests/lain42-issue-read.expected.e2e.ts apps/cli/tests/profiles/web/tests/lain42-cancellation.expected.e2e.ts
 
   # Three enterprise jobs isolate coverage, static analysis, and the
   # build-backed consumer tail. The consumer job owns the only Linux build so

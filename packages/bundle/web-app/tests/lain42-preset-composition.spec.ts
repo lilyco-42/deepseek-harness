@@ -11,12 +11,14 @@ import { loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import AgentPreset from '@deepseek-ai/dsh-agent-preset'
 import AgentPresets from '@deepseek-ai/dsh-agent-preset-registry'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import * as Persona from '@deepseek-ai/dsh-persona'
-import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
-import SessionStore from '@deepseek-ai/dsh-session'
+import { createScope, scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt, { PERSONA_PREFIX_SECTION } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import * as Lain42Tools from '../src/lain42-tools.ts'
 import { expect, it, onTestFinished } from 'vitest'
 import { expectedLain42AgentPrompts } from './expected/lain42-agent-prompts.ts'
@@ -28,7 +30,7 @@ const modes = [
   { mode: 'content', preset: 'lain42-web-content' },
 ] as const
 
-it('loads each shipped browser preset and exposes only its pinned prompt and account-scoped read tools', async () => {
+it('loads each shipped browser preset with its pinned prompt and exact active request tools', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-lain42-presets-'))
   const ctx = new Context()
   onTestFinished(async () => {
@@ -87,7 +89,10 @@ it('loads each shipped browser preset and exposes only its pinned prompt and acc
     .toEqual(modes.map(({ preset }) => ({ id: preset, broken: undefined })))
 
   for (const { mode, preset } of modes) {
-    const scope = createScope(ctx, {})
+    const session = ctx.sessions.create(SessionId(`preset-${mode}`))
+    const agent = { id: session.id, session } as NonNullable<ToolRunContext['agent']>
+    const scope = createScope(ctx, agent)
+    Object.assign(agent, { ctx: scope.ctx })
     try {
       await ctx.agentPresets.mount(scope.ctx, preset)
       const key = scopeOf(scope.ctx)
@@ -95,8 +100,25 @@ it('loads each shipped browser preset and exposes only its pinned prompt and acc
       const assembly = await ctx.systemPrompt.assemble({ scope: key })
       expect(assembly.sections.find(section => section.name === PERSONA_PREFIX_SECTION)?.text)
         .toBe(expectedLain42AgentPrompts.prompts[mode])
-      expect(assembly.tools.map(tool => tool.name).sort())
-        .toEqual(expectedLain42AgentPrompts.tools)
+      expect(assembly.tools).toEqual([])
+      for (const [turn, toolScope, names] of [
+        [1, 'account-read', expectedLain42AgentPrompts.tools],
+        [2, 'public-only', ['lain42_web_search']],
+        [3, 'evidence-only', []],
+      ] as const) {
+        session.append('turn/start', { turn })
+        const message = createUserMessage({
+          content: [{ type: 'text', text: 'Read only what this request permits.' }],
+          source: { kind: 'user', rpcId: `00000000-0000-4000-8000-00000000000${turn}`,
+            requestContext: { lain42: { version: 1, toolScope } } },
+        })
+        ctx.emit(scopeTarget(agent, agent), 'agent/inbox/claimed', { agent, message, turn })
+        session.append('user/message', message, { surfaceOp: 'append' })
+        expect((await ctx.systemPrompt.assemble({ scope: key })).tools.map(tool => tool.name).sort()).toEqual(names)
+        session.append('turn/end', { turn, reason: { kind: 'completed' } })
+        ctx.emit(scopeTarget(agent, agent), 'agent/status', { agent, status: 'idle' })
+        expect((await ctx.systemPrompt.assemble({ scope: key })).tools).toEqual([])
+      }
     } finally {
       await scope.dispose()
     }
