@@ -286,46 +286,72 @@ export function apply(ctx: Context): void {
     }),
   ]
   const definitions = new Map(registration.map(tool => [tool.name, tool] as const))
-  const disposers = new Map<string, () => void>()
-  const select = (policy: Lain42RequestPolicy | undefined, diagnostic = false): void => {
+  type ToolView = {
+    ctx: Context
+    disposers: Map<string, () => void>
+    preview: Lain42RequestPolicy | undefined
+  }
+  const views = new Map<NonNullable<ToolRunContext['agent']>, ToolView>()
+  const diagnosticView: ToolView = { ctx, disposers: new Map(), preview: undefined }
+  const select = (view: ToolView, policy: Lain42RequestPolicy | undefined, diagnostic = false): void => {
     for (const [toolName, definition] of definitions) {
       const capability = toolName === 'lain42_web_search' ? 'web_search' : toolName.slice('lain42_'.length)
       if (diagnostic || permitsLain42Tool(policy, capability)) {
-        if (!disposers.has(toolName)) disposers.set(toolName, ctx.tools.register(definition))
+        if (!view.disposers.has(toolName)) view.disposers.set(toolName, view.ctx.tools.register(definition))
       } else {
-        disposers.get(toolName)?.()
-        disposers.delete(toolName)
+        view.disposers.get(toolName)?.()
+        view.disposers.delete(toolName)
       }
     }
   }
-  select(undefined, true)
+  const release = (view: ToolView): void => {
+    for (const dispose of [...view.disposers.values()].reverse()) dispose()
+    view.disposers.clear()
+  }
+  const viewFor = (agent: NonNullable<ToolRunContext['agent']>): ToolView => {
+    const previous = views.get(agent)
+    if (previous !== undefined) return previous
+    const view: ToolView = { ctx: agent.ctx, disposers: new Map(), preview: undefined }
+    views.set(agent, view)
+    return view
+  }
   const scope = scopeOf(ctx)
-  if (scope !== undefined) {
+  if (scope === undefined) select(diagnosticView, undefined, true)
+  else {
     const projections = ctx.get('sessionProjections')
     if (projections === undefined) throw new Error('Scoped Lain42 tools require Session projections')
     ctx.effect(() => projections.register(lain42RequestPolicyProjection), 'Lain42 request policy')
     if ('session' in scope) {
       const agent = scope as NonNullable<ToolRunContext['agent']>
-      select(projections.stateOf(agent.session, 'lain42RequestPolicy'))
+      select(viewFor(agent), projections.stateOf(agent.session, 'lain42RequestPolicy'))
     }
     ctx.tools.restrict({ allow: [] })
-    let preview: Lain42RequestPolicy | undefined
+    ctx.on('agent/created', ({ agent }) => {
+      select(viewFor(agent), projections.stateOf(agent.session, 'lain42RequestPolicy'))
+    })
     ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
+      const view = viewFor(agent)
       const committed = projections.stateOf(agent.session, 'lain42RequestPolicy')
       if (committed === undefined || committed.turn !== turn) {
-        preview = undefined
-        select(undefined)
+        view.preview = undefined
+        select(view, undefined)
         return
       }
-      const current = committed.kind === 'idle' && preview?.turn === turn ? preview : committed
-      preview = claimLain42RequestPolicy(current, message)
-      select(preview)
+      const current = committed.kind === 'idle' && view.preview?.turn === turn ? view.preview : committed
+      view.preview = claimLain42RequestPolicy(current, message)
+      select(view, view.preview)
     })
-    ctx.on('agent/status', ({ status }) => {
+    ctx.on('agent/status', ({ agent, status }) => {
       if (status === 'idle') {
-        preview = undefined
-        select(undefined)
+        const view = viewFor(agent)
+        view.preview = undefined
+        select(view, undefined)
       }
+    })
+    ctx.on('agent/disposed', ({ agent }) => {
+      const view = views.get(agent)
+      if (view !== undefined) release(view)
+      views.delete(agent)
     })
     ctx.tools.guard((exec) => {
       if (!definitions.has(exec.name)) return 'The current request does not permit this tool.'
@@ -336,7 +362,8 @@ export function apply(ctx: Context): void {
     })
   }
   ctx.effect(() => () => {
-    for (const dispose of [...disposers.values()].reverse()) dispose()
-    disposers.clear()
+    release(diagnosticView)
+    for (const view of views.values()) release(view)
+    views.clear()
   }, 'Lain42 account tools')
 }

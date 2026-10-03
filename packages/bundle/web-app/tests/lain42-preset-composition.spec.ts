@@ -93,8 +93,22 @@ it('loads each shipped browser preset with its pinned prompt and exact active re
     const agent = { id: session.id, session } as NonNullable<ToolRunContext['agent']>
     const scope = createScope(ctx, agent)
     Object.assign(agent, { ctx: scope.ctx })
+    const siblingSession = ctx.sessions.create(SessionId(`other-preset-${mode}`))
+    const sibling = { id: siblingSession.id, session: siblingSession } as NonNullable<ToolRunContext['agent']>
+    const siblingScope = createScope(ctx, sibling)
+    Object.assign(sibling, { ctx: siblingScope.ctx })
     try {
       await ctx.agentPresets.mount(scope.ctx, preset)
+      await ctx.agentPresets.mount(siblingScope.ctx, preset)
+      siblingSession.append('turn/start', { turn: 90 })
+      const siblingMessage = createUserMessage({
+        content: [{ type: 'text', text: 'Independently authorized account read.' }],
+        source: { kind: 'user', rpcId: '99999999-9999-4999-8999-999999999999',
+          requestContext: { lain42: { version: 1, toolScope: 'account-read' } } },
+      })
+      ctx.emit(scopeTarget(sibling, sibling), 'agent/inbox/claimed', { agent: sibling, message: siblingMessage, turn: 90 })
+      siblingSession.append('user/message', siblingMessage, { surfaceOp: 'append' })
+      expect(ctx.tools.schemas(sibling).map(tool => tool.name).sort()).toEqual(expectedLain42AgentPrompts.tools)
       const key = scopeOf(scope.ctx)
       if (key === undefined) throw new Error(`Expected a mounted scope for ${mode}`)
       const assembly = await ctx.systemPrompt.assemble({ scope: key })
@@ -118,8 +132,12 @@ it('loads each shipped browser preset with its pinned prompt and exact active re
         session.append('turn/end', { turn, reason: { kind: 'completed' } })
         ctx.emit(scopeTarget(agent, agent), 'agent/status', { agent, status: 'idle' })
         expect((await ctx.systemPrompt.assemble({ scope: key })).tools).toEqual([])
+        expect(ctx.tools.schemas(sibling).map(tool => tool.name).sort()).toEqual(expectedLain42AgentPrompts.tools)
       }
+      ctx.emit(scopeTarget(sibling, sibling), 'agent/disposed', { agent: sibling })
+      expect(ctx.tools.schemas(sibling)).toEqual([])
     } finally {
+      await siblingScope.dispose()
       await scope.dispose()
     }
   }

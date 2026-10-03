@@ -81,7 +81,7 @@ it('rejects malformed or conflicting policy without accepting tool names or text
 it('keeps legacy RPCs distinct from idle, injected context and unknown tools', () => {
   const idle: Lain42RequestPolicy = { turn: null, kind: 'idle', requestId: null, toolScope: null }
   const initial = { ...idle, turn: 1 }
-  const unrelated = createUserMessage({ content: [{ type: 'text', text: 'account-read' }] })
+  const unrelated = createUserMessage({ content: [{ type: 'text', text: 'account-read' }], source: { kind: 'user' } })
   expect(claimLain42RequestPolicy(idle, message())).toBe(idle)
   expect(claimLain42RequestPolicy(initial, unrelated)).toBe(initial)
   const legacy = claimLain42RequestPolicy(initial, message())
