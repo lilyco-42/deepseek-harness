@@ -287,17 +287,17 @@ export function apply(ctx: Context): void {
   ]
   const definitions = new Map(registration.map(tool => [tool.name, tool] as const))
   type ToolView = {
-    ctx: Context
+    tools: Context['tools']
     disposers: Map<string, () => void>
     preview: Lain42RequestPolicy | undefined
   }
   const views = new Map<NonNullable<ToolRunContext['agent']>, ToolView>()
-  const diagnosticView: ToolView = { ctx, disposers: new Map(), preview: undefined }
+  const diagnosticView: ToolView = { tools: ctx.tools, disposers: new Map(), preview: undefined }
   const select = (view: ToolView, policy: Lain42RequestPolicy | undefined, diagnostic = false): void => {
     for (const [toolName, definition] of definitions) {
       const capability = toolName === 'lain42_web_search' ? 'web_search' : toolName.slice('lain42_'.length)
       if (diagnostic || permitsLain42Tool(policy, capability)) {
-        if (!view.disposers.has(toolName)) view.disposers.set(toolName, view.ctx.tools.register(definition))
+        if (!view.disposers.has(toolName)) view.disposers.set(toolName, view.tools.register(definition))
       } else {
         view.disposers.get(toolName)?.()
         view.disposers.delete(toolName)
@@ -311,7 +311,9 @@ export function apply(ctx: Context): void {
   const viewFor = (agent: NonNullable<ToolRunContext['agent']>): ToolView => {
     const previous = views.get(agent)
     if (previous !== undefined) return previous
-    const view: ToolView = { ctx: agent.ctx, disposers: new Map(), preview: undefined }
+    const tools = agent.ctx.get('tools')
+    if (tools === undefined) throw new Error('The Agent scope requires a tool runtime')
+    const view: ToolView = { tools, disposers: new Map(), preview: undefined }
     views.set(agent, view)
     return view
   }
