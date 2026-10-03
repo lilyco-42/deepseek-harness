@@ -339,6 +339,8 @@ export interface SessionPromptRequest {
   readonly modelSelection?: ModelSelection
   /** SHA-256 digest of execution context outside prompt content and model selection. */
   readonly requestContextDigest?: string
+  /** Opaque application metadata, snapshotted before admission and bound to request identity. Must contain no secrets; does not grant capabilities by itself. */
+  readonly requestContext?: JsonValue
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]
   readonly clientTimeZone?: string
@@ -419,11 +421,12 @@ export type SessionRequestId = Branded<'session-request-id'>
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    /** Browser prompt correlation, replay digest, and optional Host-validated time zone. */
+    /** Browser prompt correlation, replay digest, opaque application metadata, and optional Host-validated time zone. */
     'user-rpc': {
       kind: 'user'
       rpcId: SessionRequestId
       requestDigest?: string
+      requestContext?: JsonValue
       clientTimeZone?: string
     }
   }

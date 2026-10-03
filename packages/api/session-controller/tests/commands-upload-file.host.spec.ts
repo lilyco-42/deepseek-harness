@@ -16,6 +16,7 @@ import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/ty
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SessionCommandController } from '../src/commands.ts'
 import type { SessionRequestId } from '../src/types.ts'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 const SESSION = SessionId('upload-session')
 
@@ -462,7 +463,8 @@ describe('Session file uploads', () => {
   })
 
   it('logs application request context and rejects permission changes on the same identity', async () => {
-    const { controller, followup } = await uploadHarness()
+    const { ctx, controller, followup } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
     const request = {
       ...promptRequest([{ type: 'text', text: 'Read public sources only.' }]),
       requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
@@ -481,6 +483,100 @@ describe('Session file uploads', () => {
       details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
     })
     expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('retains context and retry identity across command-owner replacement', async () => {
+    const first = await uploadHarness()
+    const second = await uploadHarness()
+    onTestFinished(async () => {
+      await first.ctx.fiber.dispose()
+      await second.ctx.fiber.dispose()
+    })
+    const request = {
+      ...promptRequest([{ type: 'text', text: 'Public sources only' }]),
+      requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
+    }
+    await first.controller.prompt(request)
+    const original = first.followup.mock.calls[0]?.[0] as UserMessage
+    second.agent.session.append('user/message', original, { surfaceOp: 'append' })
+    await expect(second.controller.prompt(request)).resolves.toEqual({ accepted: true })
+    await expect(second.controller.prompt({ ...request, requestContext: null })).rejects.toMatchObject({
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    await expect(second.controller.prompt({ ...request, requestContext: undefined })).rejects.toMatchObject({
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(second.followup).not.toHaveBeenCalled()
+    expect(second.selectForNextRequest).not.toHaveBeenCalled()
+  })
+
+  it('snapshots context before asynchronous attachment admission', async () => {
+    const { ctx, controller, saveImages, followup } = await uploadHarness()
+    const admitted = Promise.withResolvers<readonly ImageAttachmentRef[]>()
+    saveImages.mockReturnValueOnce(admitted.promise)
+    const requestContext = { lain42: { version: 1, toolScope: 'public-only' } }
+    const request = {
+      ...promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }]),
+      requestContext,
+    }
+    const pending = controller.prompt(request)
+    onTestFinished(async () => {
+      admitted.resolve([])
+      try { await pending }
+      catch (error) { /* An early test failure can release admission without image bytes. */ }
+      finally { await ctx.fiber.dispose() }
+    })
+    await vi.waitFor(() => { expect(saveImages).toHaveBeenCalledOnce() })
+    requestContext.lain42.toolScope = 'account-read'
+    const retry = controller.prompt(request)
+    admitted.resolve([{
+      attachmentId: AttachmentId('context-image'), mediaType: 'image/png',
+      bytes: 3, width: 1, height: 1,
+    }])
+    await expect(pending).resolves.toEqual({ accepted: true })
+    await expect(retry).rejects.toMatchObject({
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect((followup.mock.calls[0]?.[0] as UserMessage).source).toHaveProperty(
+      'requestContext', { lain42: { version: 1, toolScope: 'public-only' } },
+    )
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it.each<{ value: JsonValue }>([
+    { value: null }, { value: false }, { value: 1 },
+    { value: ['public', { enabled: true }] },
+    { value: 'x'.repeat(8190) }, { value: '界'.repeat(2730) },
+  ])(
+    'logs bounded JSON context without changing prompt content (%#)', async ({ value: requestContext }) => {
+      const { ctx, controller, followup } = await uploadHarness()
+      onTestFinished(async () => { await ctx.fiber.dispose() })
+      const content = [{ type: 'text' as const, text: 'Only this text enters the prompt' }]
+      await controller.prompt({ ...promptRequest(content), requestContext })
+      const message = followup.mock.calls[0]?.[0] as UserMessage
+      expect(message.source).toHaveProperty('requestContext', requestContext)
+      expect(message.content).toEqual(content)
+    },
+  )
+
+  it('rejects lossy or oversized context before selecting a model or delivering work', async () => {
+    const { ctx, controller, followup, selectForNextRequest } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const cycle: { [key: string]: JsonValue } = {}
+    cycle['self'] = cycle
+    let nested: JsonValue = null
+    for (let depth = 0; depth < 20_000; depth++) nested = [nested]
+    for (const requestContext of [NaN, Infinity, cycle, nested, 'x'.repeat(8191), '界'.repeat(2731)]) {
+      await expect(controller.prompt({
+        ...promptRequest([{ type: 'text', text: 'Do not admit invalid metadata' }]),
+        requestContext,
+        modelSelection: { provider: 'fixture', model: 'other-model' },
+      })).rejects.toMatchObject({
+        code: 'gateway/bad-request', details: { issues: [{ reason: 'INVALID_REQUEST_CONTEXT' }] },
+      })
+    }
+    expect(followup).not.toHaveBeenCalled()
+    expect(selectForNextRequest).not.toHaveBeenCalled()
   })
 
   it('rejects malformed context digests and unserved prompt model selections before delivery', async () => {

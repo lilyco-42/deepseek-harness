@@ -20,7 +20,8 @@ import type { Session, SessionEvent, SessionHeader, SessionId, UserMessage } fro
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
-import { assertNever } from '@deepseek-ai/dsh-util-values'
+import { assertNever, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
@@ -350,7 +351,7 @@ export class SessionCommandController {
 
   /**
    * Reject empty content, then admit one request identity after model and attachment validation.
-   * @param request - Session, prompt content, optional model route, context digest, and delivery mode.
+   * @param request - Session, prompt content, optional model route, application metadata, context digest, and delivery mode.
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   async prompt(request: SessionPromptRequest): Promise<SessionPromptValue> {
@@ -379,12 +380,13 @@ export class SessionCommandController {
         { issues: [{ reason: 'INVALID_REQUEST_CONTEXT_DIGEST' }] },
       )
     }
+    const requestContext = snapshotPromptRequestContext(request.requestContext)
     const agent = await this.resolveAgent(request.sessionId)
     const hasImage = request.content.some(part => part.type === 'image')
     return this.agents.serializeRequestAdmission(agent, async () => {
       const currentSelection = this.agents.selectionFor(agent).current
       const requestedSelection = request.modelSelection ?? currentSelection
-      const requestDigest = promptRequestDigest(request, clientTimeZone, requestedSelection)
+      const requestDigest = promptRequestDigest(request, clientTimeZone, requestedSelection, requestContext)
       const pending = this.pendingPromptRequestIds.get(agent.session)
       const existing = findPromptRequest(agent, request.requestId)
       const pendingDigest = pending?.get(request.requestId)
@@ -407,6 +409,7 @@ export class SessionCommandController {
         kind: 'user',
         rpcId: request.requestId,
         requestDigest,
+        ...(requestContext === undefined ? {} : { requestContext }),
         ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
       }
       let delivered = false
@@ -817,10 +820,30 @@ function findPromptClaimTurn(session: Session, requestId: SessionRequestId): num
   return targetTurn
 }
 
+function snapshotPromptRequestContext(value: JsonValue | undefined): JsonValue | undefined {
+  if (value === undefined) return undefined
+  const snapshot = snapshotJsonValue(value)
+  let bounded = false
+  try {
+    bounded = snapshot !== undefined && Buffer.byteLength(JSON.stringify(snapshot), 'utf8') <= 8192
+  } catch (error) {
+    // Deep JSON can exceed the encoder's recursion limit; reject it without admitting work.
+  }
+  if (!bounded) {
+    throw new RemoteError(
+      'gateway/bad-request',
+      'requestContext must be lossless JSON of at most 8192 UTF-8 bytes',
+      { issues: [{ reason: 'INVALID_REQUEST_CONTEXT' }] },
+    )
+  }
+  return snapshot
+}
+
 function promptRequestDigest(
   request: SessionPromptRequest,
   clientTimeZone: string | undefined,
   selection: { readonly provider: string; readonly model: string; readonly reasoningEffort?: string },
+  requestContext: JsonValue | undefined,
 ): string {
   const content = request.content.map((part) => {
     switch (part.type) {
@@ -851,6 +874,7 @@ function promptRequestDigest(
       reasoningEffort: selection.reasoningEffort ?? null,
     },
     requestContextDigest: request.requestContextDigest ?? null,
+    ...(requestContext === undefined ? {} : { requestContext }),
   })
   return createHash('sha256').update(canonical).digest('hex')
 }

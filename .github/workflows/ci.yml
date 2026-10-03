@@ -40,7 +40,11 @@ jobs:
           pnpm run gen-cordis-catalog
           pnpm run gen-doc-graphs
           pnpm run gen-persistence-catalog
+          if [ ! -f docs/persistence-changes/2026-10-03-request-context.md ]; then
+            pnpm --silent run persistence-changes --record 2026-10-03-request-context --prose .github/lain42-request-context-prose.json --json
+          fi
           pnpm run verify-translation-pairing --write packages/bundle/web-app/README.md
+          pnpm run verify-translation-pairing --write packages/api/session-controller/README.md
       - name: Upload generated cancellation references
         uses: actions/upload-artifact@v4
         with:
@@ -56,6 +60,8 @@ jobs:
             docs/persistence-catalog.zh.md
             docs/persistence-catalog.i18n.yaml
             packages/bundle/web-app/README.i18n.yaml
+            packages/api/session-controller/README.i18n.yaml
+            docs/persistence-changes/2026-10-03-request-context.*
           if-no-files-found: error
       - name: Build required native system dependency
         run: pnpm run build:native-system
@@ -64,6 +70,7 @@ jobs:
           pnpm exec vitest run
           packages/api/session-controller/tests/commands-queue-attachment.host.spec.ts
           packages/api/session-controller/tests/commands-queue-replay.host.spec.ts
+          packages/api/session-controller/tests/commands-upload-file.host.spec.ts
           packages/api/session-controller/tests/controller.host.spec.ts
           packages/bundle/web-app/tests/lain42-bridge.spec.ts
 
