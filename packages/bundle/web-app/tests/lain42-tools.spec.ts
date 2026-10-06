@@ -553,7 +553,7 @@ describe('Lain42 account tool relay', () => {
       }
       expect(relayedTools).toEqual([
         'web_search', 'github_repositories', 'github_repositories_search',
-        'github_issue', 'github_issues', 'github_pull_requests',
+        'github_issue', 'github_issues', 'github_issues_search', 'github_pull_requests',
         'github_actions_runs', 'github_actions_jobs', 'github_actions_logs',
       ])
       expect(renderPrompt(await ctx.systemPrompt.assemble())).toContain('Use the Lain42 read-only tools')
