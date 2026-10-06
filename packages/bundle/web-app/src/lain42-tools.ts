@@ -190,7 +190,7 @@ export function apply(ctx: Context): void {
     text: ({ scope }) => {
       const visible = [
         'lain42_web_search', 'lain42_github_repositories',
-        'lain42_github_repositories_search', 'lain42_github_issue', 'lain42_github_issues', 'lain42_github_pull_requests',
+        'lain42_github_repositories_search', 'lain42_github_issue', 'lain42_github_issues', 'lain42_github_issues_search', 'lain42_github_pull_requests',
         'lain42_github_actions_runs', 'lain42_github_actions_jobs', 'lain42_github_actions_logs',
       ].filter(tool => ctx.tools.get(tool, scope) !== undefined)
       if (visible.length === 0) return ''
@@ -245,6 +245,17 @@ export function apply(ctx: Context): void {
       execute: (args, exec) => callRelay('github_issue', args as Record<string, unknown>, exec),
     }),
     repositoryReadTool('lain42_github_issues', 'issues', 'github_issues'),
+    defineTool({
+      name: 'lain42_github_issues_search',
+      description: 'Find recent open issues across repositories owned by the GitHub account connected to this Lain42 website account.',
+      parameters: {
+        limit: { type: 'integer', description: 'Optional number of recent issues from 1 to 20.' },
+      },
+      output: outputText(),
+      timeoutMs: RELAY_TIMEOUT_MS,
+      isConcurrencySafe: () => true,
+      execute: (args, exec) => callRelay('github_issues_search', args as Record<string, unknown>, exec),
+    }),
     repositoryReadTool('lain42_github_pull_requests', 'pull requests', 'github_pull_requests'),
     defineTool({
       name: 'lain42_github_actions_runs',
