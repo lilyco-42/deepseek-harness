@@ -190,7 +190,7 @@ export function apply(ctx: Context): void {
     text: ({ scope }) => {
       const visible = [
         'lain42_web_search', 'lain42_github_repositories',
-        'lain42_github_repositories_search', 'lain42_github_issue', 'lain42_github_issues', 'lain42_github_issues_search', 'lain42_github_pull_requests',
+        'lain42_github_repositories_search', 'lain42_github_content', 'lain42_github_issue', 'lain42_github_issues', 'lain42_github_issues_search', 'lain42_github_pull_requests',
         'lain42_github_actions_runs', 'lain42_github_actions_jobs', 'lain42_github_actions_logs',
       ].filter(tool => ctx.tools.get(tool, scope) !== undefined)
       if (visible.length === 0) return ''
@@ -231,6 +231,19 @@ export function apply(ctx: Context): void {
       timeoutMs: RELAY_TIMEOUT_MS,
       isConcurrencySafe: () => true,
       execute: (args, exec) => callRelay('github_repositories_search', args as Record<string, unknown>, exec),
+    }),
+    defineTool({
+      name: 'lain42_github_content',
+      description: 'Read repository files or discover a directory using the connected website GitHub account. After reading an issue, inspect actual related code before proposing a fix. Returns a resolved commit, blob identity and source URL; reuse the returned commit as ref for later reads in that investigation. An omitted path lists the root; directory entries are discovery metadata, not file contents, and may be truncated. Only UTF-8 text files up to 64 KiB are supported. These reads cannot edit, run tests or publish a PR.',
+      parameters: {
+        repo: { type: 'string', required: true, description: 'Repository in owner/name form from the user or a returned issue.' },
+        path: { type: 'string', description: 'Repository-relative file or directory path; omit to discover the root.' },
+        ref: { type: 'string', description: 'Optional branch, tag or commit. Prefer the commit returned by an earlier content read.' },
+      },
+      output: outputText(),
+      timeoutMs: RELAY_TIMEOUT_MS,
+      isConcurrencySafe: () => true,
+      execute: (args, exec) => callRelay('github_content', args as Record<string, unknown>, exec),
     }),
     defineTool({
       name: 'lain42_github_issue',

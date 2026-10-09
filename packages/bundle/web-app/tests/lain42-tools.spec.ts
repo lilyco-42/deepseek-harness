@@ -200,8 +200,9 @@ describe('Lain42 account tool relay', () => {
     try {
       const plugin = await scope.ctx.plugin(lain42Tools)
       const issue = ctx.tools.get('lain42_github_issue', selectedAgent)
+      const content = ctx.tools.get('lain42_github_content', selectedAgent)
       const search = ctx.tools.get('lain42_web_search', selectedAgent)
-      if (issue === undefined || search === undefined) throw new Error('Missing diagnostic relay definitions')
+      if (issue === undefined || content === undefined || search === undefined) throw new Error('Missing diagnostic relay definitions')
       session.append('turn/end', { turn: 0, reason: { kind: 'completed' } })
       const first = brandString<SessionRequestId>('11111111-1111-4111-8111-111111111111')
       const second = brandString<SessionRequestId>('22222222-2222-4222-8222-222222222222')
@@ -220,6 +221,8 @@ describe('Lain42 account tool relay', () => {
       session.append('user/message', publicMessage, { surfaceOp: 'append' })
       expect(parseRelayResult(await issue.execute({ repo: 'owner/project', number: 1 }, exec)))
         .toHaveProperty('error.code', 'tool_scope_denied')
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project', path: 'src/main.rs' }, exec)))
+        .toHaveProperty('error.code', 'tool_scope_denied')
       const denied = await ctx.tools.execute({ callId: ToolCallId('denied-account'), name: 'lain42_github_issue',
         arguments: { repo: 'owner/project', number: 1 }, signal: exec.signal, agent: selectedAgent })
       expect(denied.isError).toBe(true)
@@ -233,12 +236,17 @@ describe('Lain42 account tool relay', () => {
       session.append('user/message', claim(2, second, 'account-read'), { surfaceOp: 'append' })
       await issue.execute({ repo: 'owner/project', number: 1 }, exec)
       expect(bodies[1]).toMatchObject({ version: 2, request_id: second, tool: 'github_issue' })
+      await content.execute({ repo: 'owner/project', path: 'src/main.rs', ref: 'main' }, exec)
+      expect(bodies[2]).toMatchObject({ version: 2, request_id: second, tool: 'github_content',
+        arguments: { repo: 'owner/project', path: 'src/main.rs', ref: 'main' } })
       session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
       session.append('turn/start', { turn: 3 })
       session.append('user/message', claim(3, first, 'evidence-only'), { surfaceOp: 'append' })
       expect(ctx.tools.schemas(selectedAgent)).toEqual([])
       expect(parseRelayResult(await search.execute({ query: 'public' }, exec))).toHaveProperty('error.code', 'tool_scope_denied')
-      expect(upstream).toHaveBeenCalledTimes(2)
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project', path: 'src/main.rs' }, exec)))
+        .toHaveProperty('error.code', 'tool_scope_denied')
+      expect(upstream).toHaveBeenCalledTimes(3)
       await plugin.dispose()
       expect(ctx.sessionProjections.stateOf(session, 'lain42RequestPolicy')).toBeUndefined()
       expect(ctx.tools.schemas(selectedAgent)).toEqual([])
@@ -283,6 +291,7 @@ describe('Lain42 account tool relay', () => {
         'lain42_github_actions_jobs',
         'lain42_github_actions_logs',
         'lain42_github_actions_runs',
+        'lain42_github_content',
         'lain42_github_issue',
         'lain42_github_issues',
         'lain42_github_issues_search',
@@ -536,6 +545,7 @@ describe('Lain42 account tool relay', () => {
         ['lain42_web_search', { query: 'Rust agents' }],
         ['lain42_github_repositories', { limit: 3 }],
         ['lain42_github_repositories_search', { query: 'ast-grep', limit: 3 }],
+        ['lain42_github_content', { repo: 'owner/repo', path: 'src/main.rs', ref: 'main' }],
         ['lain42_github_issue', { repo: 'owner/repo', number: 2 }],
         ['lain42_github_issues', { repo: 'owner/repo', limit: 3 }],
         ['lain42_github_issues_search', { limit: 3 }],
@@ -553,7 +563,7 @@ describe('Lain42 account tool relay', () => {
       }
       expect(relayedTools).toEqual([
         'web_search', 'github_repositories', 'github_repositories_search',
-        'github_issue', 'github_issues', 'github_issues_search', 'github_pull_requests',
+        'github_content', 'github_issue', 'github_issues', 'github_issues_search', 'github_pull_requests',
         'github_actions_runs', 'github_actions_jobs', 'github_actions_logs',
       ])
       expect(renderPrompt(await ctx.systemPrompt.assemble())).toContain('Use the Lain42 read-only tools')

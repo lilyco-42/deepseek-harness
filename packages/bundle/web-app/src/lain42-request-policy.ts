@@ -26,7 +26,7 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const RELAY_TOOLS = new Set([
-  'web_search', 'github_repositories', 'github_repositories_search', 'github_issue',
+  'web_search', 'github_repositories', 'github_repositories_search', 'github_content', 'github_issue',
   'github_issues', 'github_issues_search', 'github_pull_requests', 'github_actions_runs', 'github_actions_jobs', 'github_actions_logs',
 ])
 const IDLE: Lain42RequestPolicy = { turn: null, kind: 'idle', requestId: null, toolScope: null }
