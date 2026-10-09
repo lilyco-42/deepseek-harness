@@ -437,6 +437,59 @@ describe('Lain42 account tool relay', () => {
     }
   })
 
+  it('reads JSON-escaped repository text without widening other tools and caps the complete wire body', async () => {
+    vi.stubEnv('LAIN42_AGENT_TOOL_RELAY_URL', RELAY_URL)
+    vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)
+    const { ctx, dispose } = await createToolContext()
+    try {
+      const content = registeredTool(ctx, 'lain42_github_content')
+      const search = registeredTool(ctx, 'lain42_web_search')
+      const source = '<'.repeat(64 * 1024)
+      const envelope = { version: 1, result: { type: 'file', text: source } }
+      // Match New API's Go JSON wire encoding, rather than a JS-only response fixture.
+      const wire = JSON.stringify(envelope).replaceAll('<', String.raw`\u003c`)
+      expect(Buffer.byteLength(wire)).toBeGreaterThan(256 * 1024)
+      expect(Buffer.byteLength(wire)).toBeLessThan(512 * 1024)
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(wire, {
+        headers: { 'content-length': String(Buffer.byteLength(wire)) },
+      })))
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project', path: 'src/main.rs' }, executionContext())))
+        .toEqual(envelope)
+      expect(parseRelayResult(await search.execute({ query: 'test' }, executionContext())))
+        .toHaveProperty('error.code', 'tool_relay_unavailable')
+
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(wire.padEnd(512 * 1024, ' '))))
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project' }, executionContext())))
+        .toEqual(envelope)
+
+      let declaredCancelled = false
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(1)) },
+        cancel() { declaredCancelled = true },
+      }), {
+        headers: { 'content-length': String(512 * 1024 + 1) },
+      })))
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project' }, executionContext())))
+        .toHaveProperty('error.code', 'tool_relay_unavailable')
+      expect(declaredCancelled).toBe(true)
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {
+        headers: { 'content-length': String(512 * 1024 + 1) },
+      })))
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project' }, executionContext())))
+        .toHaveProperty('error.code', 'tool_relay_unavailable')
+      let cancelled = false
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(512 * 1024 + 1)) },
+        cancel() { cancelled = true },
+      }))))
+      expect(parseRelayResult(await content.execute({ repo: 'owner/project' }, executionContext())))
+        .toHaveProperty('error.code', 'tool_relay_unavailable')
+      expect(cancelled).toBe(true)
+    } finally {
+      await dispose()
+    }
+  })
+
   it('returns bounded, safe errors for upstream status, oversized bodies and malformed responses', async () => {
     vi.stubEnv('LAIN42_AGENT_TOOL_RELAY_URL', RELAY_URL)
     vi.stubEnv('LAIN42_DSH_BRIDGE_SECRET', SECRET)

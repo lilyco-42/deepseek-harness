@@ -20,6 +20,9 @@ const DEFAULT_RELAY_URL = `https://api.lain42.top${RELAY_PATH}`
 const RELAY_BODY_LIMIT = 32 * 1024
 // 50k CJK/emoji characters can exceed 128 KiB after UTF-8 JSON encoding.
 const RELAY_RESPONSE_LIMIT = 256 * 1024
+// Go's JSON encoder may expand each '<', '>' or '&' byte to six wire bytes.
+// The 64 KiB repository text bound therefore needs room for its complete envelope.
+const CONTENT_RELAY_RESPONSE_LIMIT = 512 * 1024
 const RELAY_TIMEOUT_MS = 20_000
 const SESSION_ID = /^[A-Za-z0-9]{64}$/u
 
@@ -59,9 +62,10 @@ function relayEndpoint(): URL | undefined {
   }
 }
 
-async function readBoundedBody(response: Response): Promise<Buffer> {
+async function readBoundedBody(response: Response, limit: number): Promise<Buffer> {
   const declaredSize = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declaredSize) && declaredSize > RELAY_RESPONSE_LIMIT) {
+  if (Number.isFinite(declaredSize) && declaredSize > limit) {
+    await response.body?.cancel()
     throw new Error('Lain42 tool relay response exceeded its size limit')
   }
   if (response.body === null) return Buffer.alloc(0)
@@ -73,7 +77,7 @@ async function readBoundedBody(response: Response): Promise<Buffer> {
       const { done, value } = await reader.read()
       if (done) break
       size += value.byteLength
-      if (size > RELAY_RESPONSE_LIMIT) {
+      if (size > limit) {
         await reader.cancel()
         throw new Error('Lain42 tool relay response exceeded its size limit')
       }
@@ -130,7 +134,8 @@ async function callRelay(tool: string, args: Record<string, unknown>, exec: Tool
       signal: controller.signal,
       redirect: 'error',
     })
-    const responseBody = await readBoundedBody(response)
+    const responseBody = await readBoundedBody(response,
+      tool === 'github_content' ? CONTENT_RELAY_RESPONSE_LIMIT : RELAY_RESPONSE_LIMIT)
     const text = responseBody.toString('utf8')
     if (!response.ok) {
       return JSON.stringify({ error: { code: 'tool_relay_failed', message: 'The Lain42 account tool could not complete this request. Retry the tool or check the connected website session.' } })
