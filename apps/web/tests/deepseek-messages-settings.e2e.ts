@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, type Browser, type Page } from 'playwright'
-import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import {
   captureStableAria, compareOrRefreshGolden, launchWebScaffold,
   watchConsole, webSnapshotMode, type WebScaffold,
@@ -34,6 +34,12 @@ describe.skipIf(webSnapshotMode() === 'record')('web e2e: DeepSeek Messages sett
     }
   })
 
+  afterEach(async () => {
+    // A failed assertion must not leave the settings dialog open for the next
+    // scenario; these tests intentionally share provider state and the page.
+    if (page !== undefined && !page.isClosed()) await page.keyboard.press('Escape').catch(() => undefined)
+  })
+
   it('offers one DeepSeek card and saves Messages settings using the existing credential reference', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-deepseek-messages-settings'))
     expect(scaffold.ctx.llm.listProviders()).toContainEqual({ id: 'deepseek-official', name: 'DeepSeek' })
@@ -51,6 +57,9 @@ describe.skipIf(webSnapshotMode() === 'record')('web e2e: DeepSeek Messages sett
     await dialog.getByText('DeepSeek', { exact: true }).locator('xpath=ancestor::li').getByRole('button', { name: '编辑' }).click()
     const messages = dialog
     await messages.getByText('自定义设置', { exact: true }).click()
+    await expect.poll(
+      () => messages.getByLabel('API 密钥', { exact: true }).getAttribute('placeholder'),
+    ).toBe('已配置——输入新值可替换')
     expect(await messages.getByLabel('API 地址', { exact: true }).getAttribute('placeholder'))
       .toBe('https://api.deepseek.com/anthropic')
     await compareOrRefreshGolden(join(EXPECTED, 'cards.expected.md'),

@@ -47,7 +47,11 @@ export class AgentPresetSectionController {
     try {
       const result = await this.ctx.remote.agentPresets.list()
       if (!result.ok) throw new Error(result.error.message)
-      this.set({ status: 'ready', error: null, rows: result.value.presets, showPicker: result.value.modeSelectionEnabled })
+      this.set({
+        status: 'ready', error: null,
+        rows: result.value.presets.filter(row => row.userSelectable !== false),
+        showPicker: result.value.modeSelectionEnabled,
+      })
     } catch (error) { this.set({ status: 'error', error: message(error) }) }
   }
 

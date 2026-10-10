@@ -164,10 +164,10 @@ function ctxWith(face: object): PageContext {
  * otherwise re-probe on every render.
  */
 const operations = new WeakMap<object, ModelsOperations>()
-function operationsWith(face: object): ModelsOperations {
+function operationsWith(face: object, mirror = new SettingsDescribeMirror(ctxWith(face))): ModelsOperations {
   const existing = operations.get(face)
   if (existing !== undefined) return existing
-  const bound = createModelsOperations(ctxWith(face))
+  const bound = createModelsOperations(ctxWith(face), mirror)
   operations.set(face, bound)
   return bound
 }
@@ -200,13 +200,14 @@ function firstMutate(mutate: ReturnType<typeof vi.fn>): MutateCall {
 
 async function mountSection(options: Parameters<typeof scriptedFace>[0] = {}) {
   const scripted = scriptedFace(options)
+  const mirror = new SettingsDescribeMirror(ctxWith(scripted.face))
   const controller = new ModelsSettingsStore(
-    ctxWith(scripted.face), settingsSchema, new SettingsDescribeMirror(ctxWith(scripted.face)))
+    ctxWith(scripted.face), settingsSchema, mirror)
   await controller.load()
   const injected: ModelsSectionProps = {
     controller,
     useSnapshot: bindSnapshotSelector(controller.store),
-    operations: operationsWith(scripted.face),
+    operations: operationsWith(scripted.face, mirror),
     schema: settingsSchema,
     t,
     renderSlot: () => null,
@@ -818,13 +819,14 @@ describe('provider rows', () => {
       settingsNs: 'llm-pi-ai',
       settingsPath: ['providers', 'openai'],
     }]))) as never
+    const mirror = new SettingsDescribeMirror(ctxWith(scripted.face))
     const controller = new ModelsSettingsStore(
-      ctxWith(scripted.face), settingsSchema, new SettingsDescribeMirror(ctxWith(scripted.face)))
+      ctxWith(scripted.face), settingsSchema, mirror)
     await controller.load()
     render(<ModelsSection
       controller={controller}
       useSnapshot={bindSnapshotSelector(controller.store)}
-      operations={operationsWith(scripted.face)}
+      operations={operationsWith(scripted.face, mirror)}
       schema={settingsSchema}
       t={t}
       renderSlot={() => null}

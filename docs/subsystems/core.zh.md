@@ -81,9 +81,20 @@ interface Agent {
    * turn or between-turn task. The first cause wins for that activity. With no
    * active activity, cancellation is a no-op and does not arm later work.
    * @param cause - the stable caller intent carried by the active operation signal.
-   * @param options - cancellation options; `keepInbox` preserves pending work.
+   * @param options - cancellation options. `keepInbox` preserves pending work
+   *   and records claimed input when cancellation precedes request admission.
    */
   cancel(cause: AgentCancelCause, options?: CancelOptions): void
+
+  /**
+   * Cancel only when the expected durable turn is still the active turn.
+   * @param turn - turn number observed for the request being cancelled.
+   * @param cause - stable caller intent carried by the active operation signal.
+   * @param options - cancellation options. `keepInbox` preserves pending work
+   *   and records claimed input when cancellation precedes request admission.
+   * @returns whether that exact turn was active and cancellation was requested.
+   */
+  cancelActiveTurn?(turn: number, cause: AgentCancelCause, options?: CancelOptions): boolean
 
   /**
    * Resolve after the current whole-agent activity reaches quiescence. This
@@ -284,9 +295,10 @@ type InboxTarget = 'next-turn' | 'next-step'
 /** Options for {@link Agent.cancel}. */
 interface CancelOptions {
   /**
-   * Preserve queued and steering inbox items instead of discarding them. The
-   * active turn is still aborted, but un-started and pending work survives for a
-   * later turn and no canceled inbox splice is logged.
+   * Preserve queued and steering inbox items without logging their removal. If
+   * cancellation arrives before request admission, the loop records the claimed
+   * inbox batch without generated pre-step context or the system prompt; the
+   * active turn still aborts.
    */
   keepInbox?: boolean | undefined
 }
@@ -955,7 +967,7 @@ Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/s
 
 #### `agent/request` — waterfall
 
-Replace the frozen call configuration. `await next()` yields the config the machine would use (agent options on the first request, the logged header afterwards); return a replacement to switch. On step admission, this runs after assembly and `step/start`, before the system prompt and accepted user batch are committed. Cancellation here or during subsequent `prepareCall()` resolution commits neither. The prepared call capability governs prompt admission. Model-visible content must use logged channels; this waterfall cannot mutate messages.
+Replace the frozen call configuration. `await next()` yields the config the machine would use (agent options on the first request, the logged header afterwards); return a replacement to switch. On step admission, this runs after assembly and `step/start`, before the system prompt and accepted user batch are committed. Cancellation here or during subsequent `prepareCall()` resolution commits no system prompt; claimed inbox input is recorded only when cancellation used `keepInbox`, without generated pre-step context. The prepared call capability governs prompt admission. Model-visible content must use logged channels; this waterfall cannot mutate messages.
 
 ```ts cordis-catalog
 /**
@@ -964,9 +976,11 @@ Replace the frozen call configuration. `await next()` yields the config the mach
  * header afterwards); return a replacement to switch. On step admission,
  * this runs after assembly and `step/start`, before the system prompt and
  * accepted user batch are committed. Cancellation here or during subsequent
- * `prepareCall()` resolution commits neither. The prepared call capability
- * governs prompt admission. Model-visible content must use logged channels;
- * this waterfall cannot mutate messages.
+ * `prepareCall()` resolution commits no system prompt; claimed inbox input
+ * is recorded only when cancellation used `keepInbox`, without generated
+ * pre-step context. The prepared call
+ * capability governs prompt admission. Model-visible content must use
+ * logged channels; this waterfall cannot mutate messages.
  * @param payload.agent - the agent making the model call.
  * @param payload.turn - the open turn number.
  * @param payload.step - the step whose request this is.

@@ -50,8 +50,11 @@ Most users never set these; the command-line flags feed the four settings below 
 | `printUrl` | `true` | Print the `dsh web:` URL line at startup |
 | `surfaceContext` | `true` | Give the agent GUI-orientation context and expose `DSH_WEB_URL` to its shell commands |
 | `trustedHosts` | `[]` | Extra hosts allowed to reach the GUI from the network |
+| `enableLain42Bridge` | `false` | Register the private Lain42 server-to-server turn and cancellation routes |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-web-app) is the exhaustive source for every accepted field and its JSDoc.
+
+The private Lain42 turn route acknowledges a completed answer only after the Session store's durability checkpoint succeeds. Missing persistence or a failed checkpoint returns an error rather than an answer that may disappear on immediate process loss. The checkpoint does not invoke the model again.
 
 ### LAN access and trusted hosts
 
@@ -65,6 +68,30 @@ When you launch `dsh --profile web` over SSH, the URL line still prints but the 
 
 Each browser session selects a shipped preset (`standard` by default). The Agent presets settings page changes the default and edits preset child plugins; saves persist in `$DSH_HOME/profiles/web/cordis.patch.yml`. Creator's plugin-management tool is enabled only when the Host provides an editable profile.
 
+The `lain42-web`, `lain42-web-coding`, `lain42-web-research`, and `lain42-web-content` presets are for Sessions created by the Lain42 server control plane. They share a small set of account-scoped, read-only web and GitHub tools, but expose no shell, filesystem, native-desktop, plugin-management, or subagent tools. Public page contents are read only in the browser. If a client includes `[Lain42 browser-fetched evidence]` in the user turn, the Agent should use it instead of repeating the same page read. If browser CORS or network policy blocks the read, ask the user to paste the text or attach a file; the server does not fetch the page. A preset limits Agent capabilities; it does not authenticate website users or authorize access to Sessions. The control plane must resolve each opaque public Session through its own authenticated ownership mapping.
+
+### Private Lain42 control-plane bridge
+
+Version 3 turn requests require a closed `toolScope`: `public-only` permits public search, `evidence-only` permits no relay tools, and `account-read` permits the preset's named read capabilities. Optional images follow the same bounds as version 2. Versions 1 and 2 reject a permission field rather than silently discarding it. The signed scope is logged as bounded application metadata with the original RPC; retrying that identity with another scope or without it conflicts. Neither prompt text nor tool arguments grant permission.
+
+The host-only `lain42RequestPolicy` projection derives the exact open-turn RPC from committed Session events. Each Agent owns its tool registrations and claim preview, even when Agents share a preset generation. Claimed input narrows tool schemas before model assembly; actual execution checks the committed projection independently, including retained tool definitions. A second conflicting RPC in one turn denies execution. Ended turns clear permission, restarted Sessions replay it, and plugin disposal releases the projection and tool registrations. Scoped relay requests use version 2 with this exact `request_id`; New API must independently verify ownership, request admission, cancellation and permission before reading credentials or issuing HTTP. Legacy turn callers retain their existing read permission and immutable request identity; newly restricted callers require matching peers.
+
+The account tool `lain42_github_issue` reads an exact repository/issue number through New API, including closed issues. It returns the issue body (at most 12 KiB) and up to three oldest comments (2 KiB each), with truncation and partial-comment errors. Both browser-prepared Issue evidence and this model-selected read share the same New API reader. The OAuth token stays in New API; DSH receives only returned content. This read does not inspect repository source files or write issue replies or code changes.
+
+The account tool `lain42_github_content` reads repository code through the same account-owned relay. It resolves an optional branch, tag, or commit to an immutable commit before reading. An omitted path discovers the root; directory results contain at most 40 entries, mark truncation, and do not claim those files were read. File results contain at most 64 KiB of UTF-8 text, the commit, blob identity, and source URL. Reuse that commit for subsequent reads in the same investigation. New API rejects redirects and unsupported content without following download URLs. OAuth credentials remain in New API. Public-only and evidence-only requests cannot use this tool; it does not edit code, run tests, or publish a PR.
+
+Repository-content responses have a 512 KiB complete wire-body limit so JSON escaping does not reject supported 64 KiB text files. Other relay tools retain their 256 KiB limit. Declared and streamed overflow cancel the response body and return an unavailable result without exposing partial content.
+
+`enableLain42Bridge` adds one `POST /lain42/bridge/v1/turn` route for the authenticated New API backend. It requires `LAIN42_DSH_BRIDGE_SECRET` (at least 32 bytes) and a matching New API server secret. Requests use a timestamped HMAC, a one-use nonce, an opaque Session id, a UUID request id, bounded text, a required model id selected by New API, and an optional mode from `general`, `coding`, `research`, or `content`. Requests without a model id are rejected; they never fall back to the DSH process-wide default. Version 2 requests can also carry up to four PNG, JPEG, WebP, or GIF images with an aggregate decoded size of at most 8 MiB. DSH admits image bytes through its normal attachment validator before the model sees them. The route maps mode to a server-owned preset and keeps the model provider fixed at `lain42-web`; it accepts no provider, directory, or command override. It returns completed assistant text and does not stream or accept arbitrary binary attachments.
+
+The same option registers `POST /lain42/bridge/v1/cancel`. Its separately signed, at-most-4096-byte JSON body contains only version `1` and the original Session and request ids; a turn-route signature cannot authorize cancellation. The route delegates to `sessionController.cancelPrompt` and returns its receipt with the original identity. `removed` means queued input was removed; `cancellation-requested` identifies an active turn whose terminal event still needs observation. A receipt never proves terminal settlement. The turn waiter reconstructs committed Inbox mutations: cancellation of its queued request ends observation without waiting for a nonexistent turn, and an exact claim identifies its turn before the first user-message event. `not-found` does not reserve or cancel a future prompt; the control plane owns cancellation intent and admission reconciliation. Transport loss alone does not cancel work.
+
+The preset also mounts `@deepseek-ai/dsh-web-app/lain42-tools`. The relay defaults to `https://api.lain42.top/api/agent/bridge/v1/tool`; set `LAIN42_AGENT_TOOL_RELAY_URL` only to override it for another environment. The DSH service signs bounded requests with the existing `LAIN42_DSH_BRIDGE_SECRET`. New API verifies the HMAC and one-use nonce, resolves the DSH Session to its stored Lain42 account owner, and executes only the named read-only search, page-fetch, repository, issue, or pull-request operation. GitHub OAuth tokens stay in New API and are selected from the resolved account; they are never sent to DSH or the browser. Public page and repository contents remain untrusted model input. If the relay URL or shared secret is invalid, tools return an actionable service-unavailable result instead of disabling ordinary chat.
+
+For account-billed models, this bundle also provides the optional `llmRequestHeaders` resolver for the `lain42-web` model route. Set the same independent `LAIN42_AGENT_MODEL_RELAY_SECRET` (at least 32 bytes) on DSH and New API, then configure that provider profile to use `https://api.lain42.top/v1/agent` and model ids enabled by New API. The resolver signs the server-owned DSH session id and selected model for each request; it never sends the relay secret to the browser. New API rejects calls without an active server-created Agent session mapping, so the control plane must provision and pass the private DSH session id server-side.
+
+Keep this DSH process on a dedicated server instance bound to loopback or a private network, and let only the New API backend reach the route. The bridge authenticates New API as a trusted service; it does not replace New API's user/session ownership checks or make the DSH Web UI and its other APIs safe to publish. Do not enable it on a personal paired node such as the owner's A7A.
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -73,7 +100,7 @@ Each browser session selects a shipped preset (`standard` by default). The Agent
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The bundle is one patch layer of five files plus one runtime glue plugin: `cordis.patch.yml` carries the host rows and the preset registry, and each `presets/<id>.patch.yml` inserts one shipped preset declaration, applied in the order `dsh.bundle.patch` lists them. The storage stack and projection cache come from `dsh-base`; the web overlay's workspace and message-feedback rows consume that shared `storageDomain` service. The patch restates the surface-specific values the base deliberately omits, inserts the web-only host rows and browser roster, then moves the agent plane behind presets. The glue plugin owns dist serving, trust sampling, prompt sections, the bash variable, and the readiness announcements. The `office-to-pdf` row mounts one lazy [Office conversion provider](../../document/office-to-pdf/README.md) for Host consumers, including Desktop compositions using this bundle. The conversion service's Remote methods authorize preview reads, while Document Preview owns the Office viewer and Client cache.
+The bundle is one patch layer plus the runtime glue plugin and the preset-scoped Lain42 account-tool plugin: `cordis.patch.yml` carries the host rows and the preset registry, and each `presets/<id>.patch.yml` inserts one shipped preset declaration, applied in the order `dsh.bundle.patch` lists them. The storage stack and projection cache come from `dsh-base`; the web overlay's workspace and message-feedback rows consume that shared `storageDomain` service. The patch restates the surface-specific values the base deliberately omits, inserts the web-only host rows and browser roster, then moves the agent plane behind presets. The glue plugin owns dist serving, trust sampling, prompt sections, the bash variable, and the readiness announcements. The Lain42 tool plugin is loaded only by its dedicated preset. The `office-to-pdf` row mounts one lazy [Office conversion provider](../../document/office-to-pdf/README.md) for Host consumers, including Desktop compositions using this bundle. The conversion service's Remote methods authorize preview reads, while Document Preview owns the Office viewer and Client cache.
 
 ### Patch semantics
 
@@ -92,11 +119,17 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff |
+| [`src/lain42-bridge.ts`](src/lain42-bridge.ts) | The private HMAC-authenticated turn and original-request cancellation routes used by the Lain42 control plane |
+| [`src/lain42-tools.ts`](src/lain42-tools.ts) | Preset-scoped read-only tools relayed through New API with per-account OAuth isolation |
+| [`src/lain42-model-relay.ts`](src/lain42-model-relay.ts) | Session- and model-scoped signed headers for New API model requests |
 | [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--help` |
 | [`cordis.patch.yml`](cordis.patch.yml) | The web patch: restated base values, web host rows, browser roster, preset registry |
-| [`presets/`](presets) | One `@deepseek-ai/dsh-agent-preset` declaration per shipped preset (`standard`, `ptc`, `minimal`, `cordis`), each its own patch file |
+| [`presets/`](presets) | One `@deepseek-ai/dsh-agent-preset` declaration per shipped preset (`standard`, `ptc`, `minimal`, `cordis`, and the four `lain42-web*` modes), each its own patch file |
 | — | No runtime invariant companion is published; every contribution (frontend-static child plugin, prompt section, bashEnv registration) is registry-disposed with the fiber, and each owning registry's package carries that relation's invariant; the package holds no mutable state of its own to audit. |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | Dist resolution, fallback seat, prompt sections, readiness |
+| [`tests/lain42-bridge.spec.ts`](tests/lain42-bridge.spec.ts) | Signed bridge requests, bounded input, durable turn results, and failure handling |
+| [`tests/lain42-tools.spec.ts`](tests/lain42-tools.spec.ts) | Preset tool registration, session-bound requests, signatures, and safe relay failure |
+| [`tests/lain42-model-relay.spec.ts`](tests/lain42-model-relay.spec.ts) | Model-relay signatures and invalid request handling |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | Command-line parsing over a real Loader tree |
 | [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN-trust sampling |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | Default-browser handoff after the page is reachable |
@@ -142,6 +175,8 @@ Source and Web sections follow first-party reusable instructions. Different chec
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
+
+- **Lain42 history window** — the private turn waiter opens the latest 50 messages. A request or its earlier Inbox insertion outside this window cannot be reconstructed; older-result lookup and hosted terminal-delivery reconciliation remain incomplete. A cancellation receipt alone is not a recovered result.
 
 
 These limits tell you what to expect in unusual setups — a source checkout, SSH sessions, or strict networks. They are current package constraints, not a general browser comparison or a task backlog.

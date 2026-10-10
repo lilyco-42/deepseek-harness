@@ -17,10 +17,13 @@
  *                        `result` must still settle `aborted` on its own and
  *                        `dispose()` must still kill the process.
  * - `MOCK_PERMISSION`  — if `1`, the agent calls `session/request_permission`
- *                        before answering, to exercise the client's auto-answer.
+ *                        before answering, to exercise the client's permission policy.
  * - `MOCK_PERMISSION_IGNORE_DECISION` — if `1`, continue after a denied
  *                        permission so the terminal failure can carry the
  *                        provider's fixed permission fact.
+ * - `MOCK_ALLOW_ALWAYS_ONLY` — if `1`, offer `allow_always` instead of
+ *                        `allow_once`; an interactive one-operation approval
+ *                        must decline it.
  * - `MOCK_CRASH_ON_INITIALIZE` — exit while the unpublished initialize
  *                        operation is active.
  * - `MOCK_CRASH_AFTER_CHUNK` — exit after streaming the assistant chunk, so
@@ -95,6 +98,7 @@ const HANG = process.env.MOCK_HANG === '1'
 const WANT_PERMISSION = process.env.MOCK_PERMISSION === '1'
 const IGNORE_PERMISSION_DECISION = process.env.MOCK_PERMISSION_IGNORE_DECISION === '1'
 const NO_ALLOW = process.env.MOCK_NO_ALLOW === '1'
+const ALLOW_ALWAYS_ONLY = process.env.MOCK_ALLOW_ALWAYS_ONLY === '1'
 const THOUGHT = process.env.MOCK_THOUGHT === '1'
 const CRASH_ON_INITIALIZE = process.env.MOCK_CRASH_ON_INITIALIZE === '1'
 const CRASH_ON_CANCEL = process.env.MOCK_CRASH_ON_CANCEL === '1'
@@ -159,14 +163,20 @@ function makeAgent() {
       }
       if (WANT_PERMISSION) {
         // Ask the client to approve before answering; honor its decision. Under
-        // MOCK_NO_ALLOW the only options are reject-shaped, so an `allow`-policy
-        // client finds no allow option and must fall back to cancelled.
+        // MOCK_NO_ALLOW the only options are reject-shaped. Under
+        // MOCK_ALLOW_ALWAYS_ONLY, an interactive one-operation grant cannot
+        // select the session-wide allow option.
         const options = NO_ALLOW
           ? [{ optionId: 'no', name: 'Reject', kind: 'reject_once' as const }]
-          : [
-            { optionId: 'yes', name: 'Allow', kind: 'allow_once' as const },
-            { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
-          ]
+          : ALLOW_ALWAYS_ONLY
+            ? [
+              { optionId: 'always', name: 'Allow for session', kind: 'allow_always' as const },
+              { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
+            ]
+            : [
+              { optionId: 'yes', name: 'Allow', kind: 'allow_once' as const },
+              { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
+            ]
         const decision = await conn.request(methods.client.session.requestPermission, {
           sessionId: params.sessionId,
           toolCall: {

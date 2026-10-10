@@ -63,9 +63,13 @@ The shipped `sdk-minimal` profile is a standalone explicit tree rather than an o
 
 ## Results and notifications
 
+Closing a session releases its live agent but retains durable history; running the same session handle again reopens that history.
+
 `Session.run()` owns an activity interval from its prompt's durable inbox receipt through the next whole-agent idle and returns `RunResult(session_id, final_response, finish_reason, events, notifications)`. `final_response` is the last committed root-session assistant text in the interval. `finish_reason` is the `kind` of the last root-session `turn/end`, such as `completed`, `max-tokens`, or `error`, and is `None` when no turn ended. A `turn/end` without a string `data.reason.kind` violates the protocol and raises `SdkProtocolError`.
 
-`HarnessClient` retains discovered subagent ancestry for the runtime process lifetime. During `Session.run()`, `RunResult.notifications` and `on_notification` receive the root session and known descendants in wire order. `RunResult.events` contains root-session events only, so descendant output cannot replace the root response. The low-level `session_prompt()` returns the queued message id immediately; callers that bypass `Session.run()` own the later activity boundary.
+`HarnessClient` retains discovered subagent ancestry for the runtime process lifetime. During `Session.run()`, `RunResult.notifications` and `on_notification` receive the root session and known descendants in wire order. `RunResult.events` contains root-session events only, so descendant output cannot replace the root response. `Session.cancel()` requests cancellation and returns before the activity settles; observe notifications for its terminal state. `Session.close()` releases the live agent while keeping the runtime available. The low-level `session_prompt()` returns the queued message id immediately, and `session_cancel()` and `session_close()` expose the same lifecycle requests; callers that bypass `Session.run()` own the later activity boundary.
+
+The low-level client also exposes runtime-to-host requests: `next_request()` receives an `IncomingRequest`, and `respond(request.id, {"outcome": "allowed-once"})` returns an explicit one-shot approval. Hosts should answer from their own user-confirmation flow; do not auto-approve. A peer `$/cancelRequest` sets `request.cancelled`, so a host can close a pending approval UI. Late replies cannot reverse an already-cancelled decision.
 
 The selected home stores profiles, plugins, and every profile-owned durable resource. The full `sdk` profile uses its credentials, settings, and session stores; `sdk-minimal` uses only its JSONL session store. Use a fresh home when those resources must be isolated, and a fresh session id for independent work. Reusing both a harness and session id continues the durable conversation and session-owned resources.
 

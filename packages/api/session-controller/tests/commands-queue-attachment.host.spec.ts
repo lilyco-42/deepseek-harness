@@ -1,4 +1,5 @@
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, Inbox, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
@@ -12,9 +13,10 @@ import SessionStore, {
 import type { SessionEvent, SessionHeader, UserMessage } from '@deepseek-ai/dsh-session'
 import { snapshotSubagentDescriptor, SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ApiSessionAgentController } from '../src/agent.ts'
 import { SessionCommandController } from '../src/commands.ts'
+import type { SessionRequestId } from '../src/types.ts'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { installSessionReadTestServices, testSessionPersistence } from './test-remote.ts'
 
@@ -33,6 +35,7 @@ async function commandHarness(
   inbox: Inbox
   steer: ReturnType<typeof vi.fn>
   cancel: ReturnType<typeof vi.fn>
+  cancelActiveTurn: ReturnType<typeof vi.fn>
 }> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
@@ -80,8 +83,10 @@ async function commandHarness(
   const inbox = createInboxStub()
   const steer = vi.fn((message: UserMessage) => { inbox.append('next-step', message) })
   const cancel = vi.fn()
+  const cancelActiveTurn = vi.fn((turn: number) => turn === 2)
   const agent = {
     id: session.id,
+    options: {},
     session,
     inbox,
     status: 'running',
@@ -89,25 +94,38 @@ async function commandHarness(
     steer,
     followup: vi.fn(),
     cancel,
-  } as unknown as Agent
+    cancelActiveTurn,
+    whenIdle: vi.fn(async () => {}),
+    runMaintenance: async <Value>(task: (signal: AbortSignal) => Promise<Value>) => task(new AbortController().signal),
+    send: () => {},
+    inject: () => {},
+  } as Agent
   await ctx.agents.register(agent)
   ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
   ctx.provide('agentDefaultModel', {
     currentSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
     saveSelection: () => Promise.resolve(),
   } as never)
-  const selection: ModelSelectionRef = {
+  const selection: Omit<ModelSelectionRef, 'current'> & {
+    current: NonNullable<ModelSelectionRef['current']>
+    consume: (_provider: string, _model: string, _reasoningEffort: string | undefined) => boolean
+  } = {
     current: { provider: 'fixture', model: 'fixture-model' },
     assembled: undefined,
+    consume: () => false,
   }
   const agents = {
     resolveAgent: (id: SessionId) => Promise.resolve(id === agent.id
       ? { agent }
       : { error: new RemoteError('session/not-found', 'missing', { sessionId: id }) }),
+    ensureSession: () => { throw new Error('Unexpected ensureSession call in queue attachment test') },
+    presetForObservation: () => { throw new Error('Unexpected presetForObservation call in queue attachment test') },
+    presetForSession: () => { throw new Error('Unexpected presetForSession call in queue attachment test') },
+    selectForNextRequest: () => { throw new Error('Unexpected selectForNextRequest call in queue attachment test') },
     selectionFor: () => selection,
-    serializeImageAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
+    serializeRequestAdmission: <Value>(_agent: Agent, operation: () => Value | Promise<Value>) => Promise.resolve(operation()),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
-  } as unknown as ApiSessionAgentController
+  }
   return {
     ctx,
     controller: new SessionCommandController(ctx, agents, '/workspace'),
@@ -115,6 +133,7 @@ async function commandHarness(
     inbox,
     steer,
     cancel,
+    cancelActiveTurn,
   }
 }
 
@@ -141,7 +160,7 @@ describe('Session queue commands', () => {
   })
 
   it('edits, removes, steers, and rejects stale queue occurrences', async () => {
-    const { ctx, controller, agent, inbox, steer, cancel } = await commandHarness()
+    const { ctx, controller, agent, inbox, steer, cancel, cancelActiveTurn } = await commandHarness()
     const queued = createUserMessage({ content: [{ type: 'text', text: 'queued' }], source: { kind: 'user' } })
     const nextStep = createUserMessage({ content: [{ type: 'text', text: 'step' }], source: { kind: 'user' } })
     inbox.append('next-turn', queued)
@@ -226,7 +245,23 @@ describe('Session queue commands', () => {
     })), 'session/not-found')
     expect(controller.cancel({ sessionId: agent.id })).toEqual({ accepted: true })
     expect(cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+    expect(controller.cancel({ sessionId: agent.id, turn: 1 })).toEqual({ accepted: true, cancelled: false })
+    expect(controller.cancel({ sessionId: agent.id, turn: 2 })).toEqual({ accepted: true, cancelled: true })
+    expect(cancelActiveTurn).toHaveBeenNthCalledWith(1, 1, { kind: 'user' }, { keepInbox: true })
+    expect(cancelActiveTurn).toHaveBeenNthCalledWith(2, 2, { kind: 'user' }, { keepInbox: true })
+    await expectFailure(Promise.resolve().then(() => controller.cancel({ sessionId: agent.id, turn: 0 })), 'gateway/bad-request')
     await ctx.fiber.dispose()
+  })
+
+  it('reports a turn-scoped cancel as not cancelled when the runtime lacks that capability', async () => {
+    const { ctx, controller, agent } = await commandHarness()
+    Object.assign(agent, { cancelActiveTurn: undefined })
+    try {
+      expect(controller.cancel({ sessionId: agent.id, turn: 1 }))
+        .toEqual({ accepted: true, cancelled: false })
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 
   it.each(['continuable', 'seeded-continuable'] as const)(
@@ -347,6 +382,98 @@ async function persistedController(
   const agents = { resolveAgent: vi.fn() } as unknown as ApiSessionAgentController
   return { ctx, controller: new SessionCommandController(ctx, agents, '/workspace'), sessionId }
 }
+
+describe('prompt-identity cancellation', () => {
+  const requestId = brandString<SessionRequestId>('cancel-owned-request')
+  const promptMessage = () => createUserMessage({
+    content: [{ type: 'text', text: 'owned request' }],
+    source: { kind: 'user', rpcId: requestId },
+  })
+
+  it.each(['next-turn', 'next-step'] as const)('removes only the matching %s prompt', async (target) => {
+    const { ctx, controller, agent, inbox, cancel, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    const retirePrompt = vi.fn()
+    ctx.provide('fileUploads', { retirePrompt } as never)
+    const owned = promptMessage()
+    const unrelated = createUserMessage({ content: [], source: { kind: 'user' } })
+    const context = createUserMessage({ content: [], source: { kind: 'test' } })
+    inbox.append(target, owned)
+    inbox.append(target, unrelated)
+    inbox.append(target, context)
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'removed' })
+    expect(target === 'next-turn' ? inbox.nextTurn : inbox.nextStep).toEqual([unrelated, context])
+    expect(retirePrompt).toHaveBeenCalledWith(agent, requestId)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(cancelActiveTurn).not.toHaveBeenCalled()
+  })
+
+  it('does not reserve an unknown identity or guess an active turn', async () => {
+    const { ctx, controller, agent, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'not-found' })
+    agent.session.append('user/message', promptMessage(), { surfaceOp: 'append' })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'not-active' })
+    expect(cancelActiveTurn).not.toHaveBeenCalled()
+  })
+
+  it.each([1, 2])('scopes an admitted request to its durable turn %s', async (turn) => {
+    const { ctx, controller, agent, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    agent.session.append('turn/start', { turn })
+    agent.session.append('user/message', promptMessage(), { surfaceOp: 'append' })
+    agent.session.append('user/message', createUserMessage({ content: [], source: { kind: 'test' } }), { surfaceOp: 'append' })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual(turn === 2
+        ? { accepted: true, status: 'cancellation-requested', turn }
+        : { accepted: true, status: 'not-active' })
+    expect(cancelActiveTurn).toHaveBeenCalledWith(turn, { kind: 'user' }, { keepInbox: true })
+  })
+
+  it('recovers a claimed prompt before user-message admission, without confusing discard with claim', async () => {
+    const { ctx, controller, agent, cancelActiveTurn } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    const owned = promptMessage()
+    const unrelated = createUserMessage({ content: [], source: { kind: 'test' } })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [owned, unrelated] })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' })
+    agent.session.append('turn/start', { turn: 2 })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'not-active' })
+    expect(cancelActiveTurn).not.toHaveBeenCalled()
+    agent.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [owned] })
+    agent.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, removedCount: 1, inserted: [] })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'cancellation-requested', turn: 2 })
+    expect(cancelActiveTurn).toHaveBeenCalledWith(2, { kind: 'user' }, { keepInbox: true })
+  })
+
+  it('reports unsupported scoped cancellation without falling back to cancelling newer work', async () => {
+    const { ctx, controller, agent, cancel } = await commandHarness()
+    onTestFinished(() => ctx.fiber.dispose())
+    agent.session.append('turn/start', { turn: 2 })
+    agent.session.append('user/message', promptMessage(), { surfaceOp: 'append' })
+    Object.assign(agent, { cancelActiveTurn: undefined })
+    expect(await controller.cancelPrompt({ sessionId: agent.id, requestId }))
+      .toEqual({ accepted: true, status: 'unsupported' })
+    expect(cancel).not.toHaveBeenCalled()
+  })
+
+  it('retains missing-session and subagent ownership errors', async () => {
+    const ordinary = await commandHarness()
+    onTestFinished(() => ordinary.ctx.fiber.dispose())
+    await expect(ordinary.controller.cancelPrompt({ sessionId: SessionId('missing'), requestId }))
+      .rejects.toMatchObject({ code: 'session/not-found' })
+    const child = await commandHarness('continuable')
+    onTestFinished(() => child.ctx.fiber.dispose())
+    await expect(child.controller.cancelPrompt({ sessionId: child.agent.id, requestId }))
+      .rejects.toMatchObject({ code: 'session/agent-busy' })
+  })
+})
 
 describe('Session attachment authorization', () => {
   it.each([

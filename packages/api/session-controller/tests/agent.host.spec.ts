@@ -329,6 +329,35 @@ describe('ApiSession model selection', () => {
   })
 })
 
+describe('ApiSession request admission', () => {
+  it('serializes model selection and prompt admission per Agent only', async () => {
+    const { ctx, agents } = await harness()
+    const first = agent(ctx, header('serialized-first'))
+    const independent = agent(ctx, header('serialized-independent'))
+    const entered = Promise.withResolvers<undefined>()
+    const gate = Promise.withResolvers<undefined>()
+    const order: string[] = []
+
+    const firstRun = agents.serializeRequestAdmission(first, async () => {
+      entered.resolve(undefined)
+      await gate.promise
+      order.push('first')
+    })
+    await entered.promise
+    const secondRun = agents.serializeRequestAdmission(first, async () => {
+      order.push('second')
+    })
+    await agents.serializeRequestAdmission(independent, async () => {
+      order.push('independent')
+    })
+    expect(order).toEqual(['independent'])
+
+    gate.resolve(undefined)
+    await Promise.all([firstRun, secondRun])
+    expect(order).toEqual(['independent', 'first', 'second'])
+  })
+})
+
 describe('ApiSession create or adoption', () => {
   it('shares one in-flight creation between concurrent callers', async () => {
     const { ctx, agents } = await harness()

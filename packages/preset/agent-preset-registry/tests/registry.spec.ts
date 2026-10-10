@@ -113,9 +113,14 @@ describe('declarative preset revisions', () => {
 
   it('inventories active and disabled child entries and declared display metadata', async () => {
     const ctx = await setup()
-    await declare(ctx, { ...contribution('standard'), name: 'Standard', description: 'General', order: 2 })
-    await declare(ctx, { id: 'empty', order: 1, plugins: [{ name: 'missing', disabled: true }] })
-    expect((await ctx.agentPresets.list()).map(row => row.id)).toEqual(['empty', 'standard'])
+    await declare(ctx, {
+      ...contribution('standard'), name: 'Standard', description: 'General', order: 2, userSelectable: false,
+    })
+    await declare(ctx, { id: 'empty', order: 1, userSelectable: true, plugins: [{ name: 'missing', disabled: true }] })
+    const listed = await ctx.agentPresets.list()
+    expect(listed.map(row => row.id)).toEqual(['empty', 'standard'])
+    expect(listed.find(row => row.id === 'empty')?.userSelectable).toBe(true)
+    expect(listed.find(row => row.id === 'standard')?.userSelectable).toBe(false)
     expect(await ctx.agentPresets.compositionInventory()).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'standard', name: 'Standard', isDefault: true, rows: expect.any(Array) as unknown[] }),
       expect.objectContaining({ id: 'empty', rows: [expect.objectContaining({ moduleName: 'missing', enabled: false })] }),

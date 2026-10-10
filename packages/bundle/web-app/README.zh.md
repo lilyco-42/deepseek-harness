@@ -50,8 +50,11 @@ dsh --profile web --no-open --port 8080
 | `printUrl` | `true` | 启动时打印 `dsh web:` URL 行 |
 | `surfaceContext` | `true` | 给 agent 提供 GUI 定位上下文，并把 `DSH_WEB_URL` 暴露给其 shell 命令 |
 | `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
+| `enableLain42Bridge` | `false` | 注册仅供 Lain42 服务端调用的对话与取消接口 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)是每个受支持字段及其 JSDoc 的穷尽式真源。
+
+Lain42 私有对话路由仅在 Session store 的持久化检查点成功后确认完整答案。缺少持久化服务或检查点失败时返回错误，避免确认可能在进程立即退出后丢失的答案。检查点不会再次调用模型。
 
 ### LAN 访问与可信主机
 
@@ -65,6 +68,30 @@ dsh --profile web --no-open --port 8080
 
 每个浏览器会话选择一个随发行版交付的 preset（默认 `standard`）。Agent 预设设置页可更改默认项并编辑预设的子插件；保存结果持久化到 `$DSH_HOME/profiles/web/cordis.patch.yml`。只有 Host 提供可编辑的 profile 时，Creator 的插件管理工具才会启用。
 
+`lain42-web`、`lain42-web-coding`、`lain42-web-research` 与 `lain42-web-content` 预设供 Lain42 服务端控制面创建会话时使用。它们共享少量按账号隔离的只读网页与 GitHub 工具，但不开放 shell、文件系统、本机桌面、插件管理或子 Agent 工具。公开网页正文只在用户浏览器中读取；如果客户端已经在用户轮次中加入 `[Lain42 browser-fetched evidence]`，Agent 应使用该结果，不要重复读取同一网页。如果浏览器受 CORS 或网络策略限制而无法读取，用户需要粘贴正文或附加文件，服务器不会代为抓取。预设只限制 Agent 能力，不负责验证网站用户身份或授权会话访问；控制面必须通过自己的已认证归属映射解析每个不透明的公开会话。
+
+### Lain42 私有控制面接口
+
+第 3 版对话请求必须带有封闭集合中的 `toolScope`：`public-only` 仅允许公开搜索，`evidence-only` 不允许中继工具，`account-read` 允许预设列出的只读能力。可选图片沿用第 2 版限制。第 1、2 版请求拒绝权限字段，不会悄悄忽略它。签名权限作为有界应用元数据与原始 RPC 一起写入日志；同一请求标识改用其他权限或省略权限会冲突。提示词和工具参数均不能授予权限。
+
+仅在宿主机可见的 `lain42RequestPolicy` 投影从已提交的 Session 事件推导当前开放轮次的确切 RPC。即使共享同一预设代次，每个 Agent 也独立持有工具注册与认领预览。输入被认领后、模型组装前收窄工具 schema；实际执行独立检查已提交的投影，包括仍持有的工具定义。同一轮次出现另一个冲突 RPC 时拒绝执行。轮次结束清空权限，会话重启可重放恢复，插件释放会移除投影与工具注册。作用域内的中继请求使用第 2 版并携带该确切 `request_id`；New API 必须在读取凭据或发起 HTTP 前独立检查所有权、请求接纳、取消与权限。旧版对话调用者保留既有只读权限和不可变请求标识；新增受限调用者要求双方版本匹配。
+
+账号工具 `lain42_github_issue` 通过 New API 按仓库和编号读取指定 Issue，包括已关闭 Issue。它返回最多 12 KiB 的正文及最多三条最早评论（每条 2 KiB），并标明截断和评论读取失败。浏览器预读与模型选择的详情读取共用同一个 New API 读取器。OAuth token 留在 New API，DSH 只收到读取的内容；该工具不读取仓库源码，也不发布 Issue 回复或修改代码。
+
+账号工具 `lain42_github_content` 通过同一个按账号归属隔离的中继读取仓库代码。它先把可选的分支、标签或提交解析为不可变提交，再读取内容。不传路径时列出根目录；目录结果最多包含 40 个条目，标记截断，且不会声称已读取这些文件。文件结果包含最多 64 KiB 的 UTF-8 文本、提交、blob 标识和来源 URL。同一次分析中的后续读取应复用该提交。New API 拒绝重定向及不支持的内容，不跟随下载 URL。OAuth 凭据仍留在 New API。public-only 与 evidence-only 请求不能使用此工具；它不会修改代码、运行测试或发布 PR。
+
+仓库内容响应的完整传输正文上限为 512 KiB，避免 JSON 转义导致受支持的 64 KiB 文本文件被拒绝。其他中继工具仍保持 256 KiB 上限。声明大小或流式读取超过上限时，会取消响应正文并返回不可用结果，不暴露部分内容。
+
+`enableLain42Bridge` 会添加一个 `POST /lain42/bridge/v1/turn` 路由，仅供已认证的 New API 后端调用。它要求设置 `LAIN42_DSH_BRIDGE_SECRET`（至少 32 字节），并与 New API 服务端使用的密钥一致。请求带有时间戳 HMAC、一次性 nonce、不透明会话 ID、UUID 请求 ID、有界文本，以及由 New API 选择的必填模型 ID；`general`、`coding`、`research`、`content` 模式可以省略，省略时使用 `general`。缺少模型 ID 的请求会被拒绝，不会回退到 DSH 进程级默认模型。v2 请求还可以携带最多 4 张 PNG、JPEG、WebP 或 GIF 图片，解码后合计不超过 8 MiB；图片会先通过 DSH 现有的附件校验，再进入模型请求。路由把模式映射到服务端固定的预设，并保持 `lain42-web` 模型 provider 不变；不接受 provider、目录或命令覆盖。当前只返回完成后的助手文本，不支持流式传输或任意二进制附件。
+
+同一选项还会注册 `POST /lain42/bridge/v1/cancel`。其独立签名的 JSON 请求体最多为 4096 字节，只包含版本 `1`、原始会话 ID 和请求 ID；对话路由的签名不能授权取消操作。该路由调用 `sessionController.cancelPrompt`，并在回执中保留原始身份。`removed` 表示已移除排队输入；`cancellation-requested` 标识一个仍须观察终态事件的活动轮次。回执不证明任务已进入终态。对话等待器重放已提交的 Inbox 变更：自身排队请求被取消后立即结束观察，不等待不存在的轮次；请求被确切领取后，会在首条用户消息出现前确定所属轮次。`not-found` 不会为未来输入预留身份或取消未来输入；控制面负责保存取消意图并协调接收过程。仅有网络断开不会取消工作。
+
+该 preset 还会挂载 `@deepseek-ai/dsh-web-app/lain42-tools`。中继默认使用 `https://api.lain42.top/api/agent/bridge/v1/tool`；只有切换到其他环境时才需要用 `LAIN42_AGENT_TOOL_RELAY_URL` 覆盖。DSH 服务使用已有的 `LAIN42_DSH_BRIDGE_SECRET` 为有界请求签名。New API 验证 HMAC 和一次性 nonce 后，根据已保存的 DSH 会话归属解析 Lain42 账号，并仅执行指定的只读搜索、网页读取、仓库、Issue 或 PR 操作。GitHub OAuth 令牌留在 New API，按解析出的账号选择，不会发送到 DSH 或浏览器。公开网页和仓库内容都作为不可信模型输入。如果中继 URL 或共享密钥无效，工具会返回可操作的服务不可用提示，不会让普通聊天整体停用。
+
+要让模型按账号计费，本 bundle 还会为 `lain42-web` 模型路由提供可选的 `llmRequestHeaders` 解析器。DSH 与 New API 必须设置相同且独立的 `LAIN42_AGENT_MODEL_RELAY_SECRET`（至少 32 字节），再把 provider profile 指向 `https://api.lain42.top/v1/agent`，模型 id 使用 New API 已启用的名称。解析器会为每次请求签署服务端创建的 DSH 会话 id 和模型名称，不会把签名密钥发送到浏览器。New API 会拒绝缺少有效服务端 Agent 会话映射的请求，因此控制面必须在服务端创建映射并传递私有 DSH 会话 id。
+
+请把该 DSH 进程运行在专用服务器实例中并绑定 loopback 或私有网络，只允许 New API 后端访问此路由。该接口认证的是可信的 New API 服务，不替代 New API 的用户与会话归属校验，也不会让 DSH Web 界面及其其他 API 适合公开。不要在个人配对设备（例如所有者的 A7A）上启用。
+
 -----
 
 <a id="understand-the-implementation"></a>
@@ -73,7 +100,7 @@ dsh --profile web --no-open --port 8080
 <details>
 <summary>实现细节——点击展开</summary>
 
-此 bundle 由一层五个文件的补丁和一个运行时胶水插件组成：`cordis.patch.yml` 承载宿主行和 preset 注册表，每个 `presets/<id>.patch.yml` 插入一条随发行版交付的 preset 声明，按 `dsh.bundle.patch` 列出的顺序应用。存储栈与投影缓存来自 `dsh-base`；Web 叠加层的工作区和消息反馈条目消费共享的 `storageDomain` 服务。补丁重述 base 有意省略的界面专用值，插入 Web 专用宿主条目和浏览器插件列表，再将 Agent 层移到预设后面。胶水插件负责 dist 服务、信任采样、提示词段落、bash 变量和就绪通知。`office-to-pdf` 条目为宿主消费者挂载一个延迟创建引擎的 [Office 转换提供方](../../document/office-to-pdf/README.zh.md)，使用此 bundle 的 Desktop 组合也共享该提供方。 转换服务的 Remote 方法负责预览读取授权，Document Preview 负责 Office 查看器和客户端缓存。
+此 bundle 由补丁层、运行时胶水插件和仅供 Lain42 预设使用的账号工具插件组成：`cordis.patch.yml` 承载宿主行和 preset 注册表，每个 `presets/<id>.patch.yml` 插入一条随发行版交付的 preset 声明，按 `dsh.bundle.patch` 列出的顺序应用。存储栈与投影缓存来自 `dsh-base`；Web 叠加层的工作区和消息反馈条目消费共享的 `storageDomain` 服务。补丁重述 base 有意省略的界面专用值，插入 Web 专用宿主条目和浏览器插件列表，再将 Agent 层移到预设后面。胶水插件负责 dist 服务、信任采样、提示词段落、bash 变量和就绪通知。Lain42 工具插件只会由专用 preset 加载。`office-to-pdf` 条目为宿主消费者挂载一个延迟创建引擎的 [Office 转换提供方](../../document/office-to-pdf/README.zh.md)，使用此 bundle 的 Desktop 组合也共享该提供方。转换服务的 Remote 方法负责预览读取授权，Document Preview 负责 Office 查看器和客户端缓存。
 
 ### patch 语义
 
@@ -92,11 +119,17 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、LAN 信任采样、提示词段落、bash 变量、URL 行、浏览器交接 |
+| [`src/lain42-bridge.ts`](src/lain42-bridge.ts) | Lain42 控制面使用的 HMAC 认证私有对话与原请求取消路由 |
+| [`src/lain42-tools.ts`](src/lain42-tools.ts) | 仅在专用 preset 中注册、经 New API 按账号隔离转发的只读工具 |
+| [`src/lain42-model-relay.ts`](src/lain42-model-relay.ts) | 发往 New API 的会话与模型级签名请求头 |
 | [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--trusted-host`、`--no-open`、`--help` |
 | [`cordis.patch.yml`](cordis.patch.yml) | Web patch：重述的基础值、Web 宿主行、浏览器名录、preset 注册表 |
-| [`presets/`](presets) | 每个随发行版交付的 preset（`standard`、`ptc`、`minimal`、`cordis`）各一条 `@deepseek-ai/dsh-agent-preset` 声明，各自一个补丁文件 |
+| [`presets/`](presets) | 每个随发行版交付的 preset（`standard`、`ptc`、`minimal`、`cordis` 和四种 `lain42-web*` 模式）各一条 `@deepseek-ai/dsh-agent-preset` 声明，各自一个补丁文件 |
 | — | 不发布运行时不变式伴生入口；每项贡献（frontend-static 子插件、提示词段落、bashEnv 注册）都会随 fiber 由注册表释放，且每个所属注册表的包负责该关系的不变式；本包不持有需要审计的可变状态。 |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist 解析、回退席位、提示词段落、就绪宣告 |
+| [`tests/lain42-bridge.spec.ts`](tests/lain42-bridge.spec.ts) | 签名桥接请求、有界输入、持久化轮次结果与失败处理 |
+| [`tests/lain42-tools.spec.ts`](tests/lain42-tools.spec.ts) | preset 工具注册、会话绑定请求、签名与安全失败处理 |
+| [`tests/lain42-model-relay.spec.ts`](tests/lain42-model-relay.spec.ts) | 模型中继签名与无效请求处理 |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | 在真实 Loader 树上的命令行解析 |
 | [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN 信任采样 |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | 页面可达后的默认浏览器交接 |
@@ -142,6 +175,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 ## 已知限制与延期工作
 
 <a id="known-limitations-and-deferred-work"></a>
+
+- **Lain42 历史窗口**——私有对话等待器从最近 50 条消息开始观察。请求或其先前的 Inbox 插入位于窗口之外时无法重建；更早结果的查询与托管终态回传仍未完成。仅有取消回执不代表结果已恢复。
 
 
 这些限制告诉你在不常见的环境下会遇到什么——源码 checkout、SSH 会话或严格网络。它们是当前包约束，不是通用的浏览器对比或任务积压。

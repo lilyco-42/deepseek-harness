@@ -13,6 +13,7 @@ import { SessionHistoryController } from '@deepseek-ai/dsh-api-session-controlle
 import { subagentIdentityProjectionDefinition } from '@deepseek-ai/dsh-subagent/src/projection.ts'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { createInboxStub, mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { Agent, Inbox } from '@deepseek-ai/dsh-agent'
@@ -688,7 +689,7 @@ describe('subagent ownership fence', () => {
     await ctx.plugin(SessionStore)
     await ctx.plugin(AgentRegistry)
     const session = ctx.sessions.create(sid('session-browser-zone'), { meta: { cwd: '/proj' } })
-    const followup = vi.fn()
+    const followup = vi.fn((_message: UserMessage) => undefined)
     const agent = {
       id: session.id, session, inbox: inboxFor(), status: 'idle', ctx, followup,
     } as unknown as Agent
@@ -708,9 +709,9 @@ describe('subagent ownership fence', () => {
       clientTimeZone: alias,
     })
     await expect(remote.prompt(zonedRequest)).resolves.toMatchObject({ ok: true })
-    expect(followup).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(followup.mock.calls[0]?.[0]).toMatchObject({
       source: { kind: 'user', rpcId: zonedRequest.requestId, clientTimeZone: canonical },
-    }))
+    })
 
     const utcRequest = promptRequest({
       sessionId: agent.id,
@@ -719,9 +720,9 @@ describe('subagent ownership fence', () => {
       clientTimeZone: 'UTC',
     })
     await expect(remote.prompt(utcRequest)).resolves.toMatchObject({ ok: true })
-    expect(followup).toHaveBeenNthCalledWith(2, expect.objectContaining({
+    expect(followup.mock.calls[1]?.[0]).toMatchObject({
       source: { kind: 'user', rpcId: utcRequest.requestId, clientTimeZone: 'UTC' },
-    }))
+    })
 
     const unzonedRequest = promptRequest({
       sessionId: agent.id,
@@ -729,9 +730,9 @@ describe('subagent ownership fence', () => {
       content: [{ type: 'text' as const, text: 'headless work' }],
     })
     await expect(remote.prompt(unzonedRequest)).resolves.toMatchObject({ ok: true })
-    expect(followup).toHaveBeenNthCalledWith(3, expect.objectContaining({
+    expect(followup.mock.calls[2]?.[0]).toMatchObject({
       source: { kind: 'user', rpcId: unzonedRequest.requestId },
-    }))
+    })
 
     for (const clientTimeZone of ['', ' UTC', 'CST', 'Not/A_Real_Zone']) {
       const invalid = await remote.prompt(promptRequest({

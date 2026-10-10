@@ -141,7 +141,7 @@ export class ApiSessionAgentController {
   private readonly resumes = new Map<SessionId, Promise<Agent>>()
   private readonly creations = new Map<SessionId, Promise<Agent>>()
   private readonly selections = new WeakMap<Agent, InstalledSelection>()
-  private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
+  private readonly requestAdmissionChains = new WeakMap<Agent, Promise<void>>()
 
   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
   constructor(private readonly ctx: Context) {
@@ -362,14 +362,14 @@ export class ApiSessionAgentController {
   }
 
   /**
-   * Serialize image admission and model selection for one Agent.
+   * Serialize model selection and prompt admission for one Agent.
    * @param agent - live Agent that owns the serialization chain.
-   * @param operation - asynchronous operation admitted after prior work settles.
+   * @param operation - operation admitted after prior work settles; may complete synchronously.
    * @returns the operation result or rejection.
    */
-  serializeImageAdmission<Value>(agent: Agent, operation: () => Promise<Value>): Promise<Value> {
-    const result = (this.imageAdmissionChains.get(agent) ?? Promise.resolve()).then(operation)
-    this.imageAdmissionChains.set(agent, result.then(() => undefined, () => undefined))
+  serializeRequestAdmission<Value>(agent: Agent, operation: () => Value | Promise<Value>): Promise<Value> {
+    const result = (this.requestAdmissionChains.get(agent) ?? Promise.resolve()).then(operation)
+    this.requestAdmissionChains.set(agent, result.then(() => undefined, () => undefined))
     return result
   }
 

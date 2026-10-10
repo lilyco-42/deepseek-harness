@@ -814,8 +814,8 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 @Remote('create') create(request: SessionCreateRequest): Promise<SessionCreateValue>
 
 /**
- * Select one Session-local model after explicitly resuming the Session.
- * @param request - Session identity and requested model selection.
+ * Select one Session-local model and optionally save it as the deployment default.
+ * @param request - Session identity, requested model, and default-persistence choice.
  * @returns the normalized selection installed for the Session.
  */
 @Remote('selectModel') selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue>
@@ -900,6 +900,13 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
  * @returns acknowledgement that cancellation was requested.
  */
 @Remote('cancel') cancel(request: SessionCancelRequest): SessionCancelValue
+
+/**
+ * Cancel only work belonging to one original accepted prompt.
+ * @param request - Session and original prompt identity.
+ * @returns admitted action, not a claim of completed turn settlement.
+ */
+@Remote('cancelPrompt') cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue>
 
 /**
  * Read one cold-safe, message-aligned Session history page.

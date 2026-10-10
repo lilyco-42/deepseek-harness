@@ -1,6 +1,6 @@
 /** Session commands whose activation policy is explicit at each Remote method. */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
@@ -16,11 +16,12 @@ import {
 import type { MessageSource } from '@deepseek-ai/dsh-llm'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
-import { assertNever } from '@deepseek-ai/dsh-util-values'
+import { assertNever, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
@@ -38,6 +39,8 @@ import type {
   SessionAttachmentValue,
   SessionCancelRequest,
   SessionCancelValue,
+  SessionCancelPromptRequest,
+  SessionCancelPromptValue,
   SessionCreateRequest,
   SessionCreateValue,
   SessionForkRequest,
@@ -67,6 +70,17 @@ function hasPromptContent(content: readonly PromptContentCandidate[]): boolean {
   return content.some(part => part.type !== 'text' || part.text.trim().length > 0)
 }
 
+type CommandAgentServices = Pick<ApiSessionAgentController,
+  | 'composeAgent'
+  | 'ensureSession'
+  | 'presetForObservation'
+  | 'presetForSession'
+  | 'resolveAgent'
+  | 'selectForNextRequest'
+  | 'selectionFor'
+  | 'serializeRequestAdmission'
+>
+
 /**
  * Resolve the omitted-`atSeq` default to the latest completed-turn prefix,
  * including standalone events before the next turn begins.
@@ -85,6 +99,8 @@ function latestCompletedPrefixBoundary(events: readonly SessionEvent[]): Session
 
 /** Implements Session business commands delegated by the Session Controller Remote service. */
 export class SessionCommandController {
+  private readonly pendingPromptRequestIds = new WeakMap<Session, Map<SessionRequestId, string>>()
+
   /**
    * @param ctx - Host context carrying Agent, model, attachment, title, and Workspace services.
    * @param agents - sole owner of create, resume, and Session-local model selection.
@@ -92,9 +108,37 @@ export class SessionCommandController {
    */
   constructor(
     private readonly ctx: Context,
-    private readonly agents: ApiSessionAgentController,
+    private readonly agents: CommandAgentServices,
     private readonly defaultCwd: string,
-  ) {}
+  ) {
+    ctx.on('session/event', (session, event) => {
+      const pending = this.pendingPromptRequestIds.get(session)
+      if (pending === undefined) return
+      if (event.type === 'user/message') {
+        const source = event.data.source
+        if (source.kind === 'user' && 'rpcId' in source && typeof source.rpcId === 'string') {
+          pending.delete(source.rpcId)
+        }
+      } else if (event.type === 'turn/end') {
+        const agent = this.ctx.agents.get(session.id)
+        const queuedMessages = agent === undefined
+          ? []
+          : [...agent.inbox.nextTurn, ...agent.inbox.nextStep]
+        const queued = new Set(
+          queuedMessages.flatMap((message) => {
+            const source = message.source
+            return source.kind === 'user' && 'rpcId' in source && typeof source.rpcId === 'string'
+              ? [source.rpcId]
+              : []
+          }),
+        )
+        for (const requestId of pending.keys()) {
+          if (agent === undefined || !queued.has(requestId)) pending.delete(requestId)
+        }
+      }
+      if (pending.size === 0) this.pendingPromptRequestIds.delete(session)
+    })
+  }
 
   /**
    * Create or idempotently adopt one ordinary Session.
@@ -144,12 +188,12 @@ export class SessionCommandController {
 
   /**
    * Validate and install one Session-local model selection.
-   * @param request - Session identity and requested model selection.
+   * @param request - Session identity, requested model, and default-persistence choice.
    * @returns the normalized selection installed for the Session.
    */
   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
     const agent = await this.resolveAgent(request.sessionId)
-    return this.agents.serializeImageAdmission(agent, async () => {
+    return this.agents.serializeRequestAdmission(agent, async () => {
       try {
         const resolved = await this.ctx.llm.resolveCallConfig({
           provider: request.provider,
@@ -166,12 +210,14 @@ export class SessionCommandController {
             : { reasoningEffort: resolved.reasoningEffort }),
         }
         this.agents.selectForNextRequest(agent, selected)
-        try {
-          await this.ctx.agentDefaultModel.saveSelection(selected)
-        } catch (error) {
-          this.ctx.logger.warn(
-            `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
-          )
+        if (request.persistDefault !== false) {
+          try {
+            await this.ctx.agentDefaultModel.saveSelection(selected)
+          } catch (error) {
+            this.ctx.logger.warn(
+              `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
+            )
+          }
         }
         return { selected: { ...selected } }
       } catch (error) {
@@ -304,8 +350,8 @@ export class SessionCommandController {
   }
 
   /**
-   * Reject empty content, then admit one prompt after Agent and attachment validation.
-   * @param request - Session identity, prompt content, source metadata, and delivery mode.
+   * Reject empty content, then admit one request identity after model and attachment validation.
+   * @param request - Session, prompt content, optional model route, application metadata, context digest, and delivery mode.
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   async prompt(request: SessionPromptRequest): Promise<SessionPromptValue> {
@@ -326,31 +372,54 @@ export class SessionCommandController {
         { value: request.clientTimeZone },
       )
     }
-    const agent = await this.resolveAgent(request.sessionId)
-    if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
-    const selection = this.agents.selectionFor(agent).current
-    if (!routeServed(this.ctx, selection.provider)) {
+    if (request.requestContextDigest !== undefined
+      && !/^[a-f0-9]{64}$/u.test(request.requestContextDigest)) {
       throw new RemoteError(
-        'session/model-unavailable',
-        `no adapter serves provider "${selection.provider}"; select a model for this session`,
-        { provider: selection.provider, model: selection.model },
+        'gateway/bad-request',
+        'requestContextDigest must be a lowercase SHA-256 hex digest',
+        { issues: [{ reason: 'INVALID_REQUEST_CONTEXT_DIGEST' }] },
       )
     }
-    const source: MessageSource = {
-      kind: 'user',
-      rpcId: request.requestId,
-      ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
-    }
+    const requestContext = snapshotPromptRequestContext(request.requestContext)
+    const agent = await this.resolveAgent(request.sessionId)
     const hasImage = request.content.some(part => part.type === 'image')
-    const admit = async (): Promise<SessionPromptValue> => {
+    return this.agents.serializeRequestAdmission(agent, async () => {
+      const currentSelection = this.agents.selectionFor(agent).current
+      const requestedSelection = request.modelSelection ?? currentSelection
+      const requestDigest = promptRequestDigest(request, clientTimeZone, requestedSelection, requestContext)
+      const pending = this.pendingPromptRequestIds.get(agent.session)
+      const existing = findPromptRequest(agent, request.requestId)
+      const pendingDigest = pending?.get(request.requestId)
+      if (existing !== undefined) assertPromptRequestDigest(existing, requestDigest)
+      if (pendingDigest !== undefined) {
+        assertPromptRequestDigest({ requestDigest: pendingDigest }, requestDigest)
+      }
+      if (existing !== undefined || pendingDigest !== undefined) return { accepted: true }
+      const selection = request.modelSelection === undefined
+        ? currentSelection
+        : await this.resolvePromptModelSelection(request.modelSelection)
+      if (!routeServed(this.ctx, selection.provider)) {
+        throw new RemoteError(
+          'session/model-unavailable',
+          `no adapter serves provider "${selection.provider}"; select a model for this session`,
+          { provider: selection.provider, model: selection.model },
+        )
+      }
+      const source: MessageSource = {
+        kind: 'user',
+        rpcId: request.requestId,
+        requestDigest,
+        ...(requestContext === undefined ? {} : { requestContext }),
+        ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
+      }
+      let delivered = false
       try {
         if (hasImage) {
-          const current = this.agents.selectionFor(agent).current
-          const model = await this.ctx.llm.resolveModelInfo(current.provider, current.model)
+          const model = await this.ctx.llm.resolveModelInfo(selection.provider, selection.model)
           if (model.inputModalities !== undefined && !model.inputModalities.includes('image')) {
             throw new RemoteError(
               'session/attachment-invalid',
-              `Model "${current.model}" does not support image input.`,
+              `Model "${selection.model}" does not support image input.`,
               { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
             )
           }
@@ -369,10 +438,18 @@ export class SessionCommandController {
           )
         }
         using binding = this.ctx.fileUploads.bindPrompt(agent, admission.receiptIds, request.requestId)
+        if (request.modelSelection !== undefined) this.agents.selectForNextRequest(agent, selection)
+        const admitted = this.pendingPromptRequestIds.get(agent.session) ?? new Map<SessionRequestId, string>()
+        admitted.set(request.requestId, requestDigest)
+        this.pendingPromptRequestIds.set(agent.session, admitted)
         if (request.mode === 'steer') agent.steer(message)
         else agent.followup(message)
+        delivered = true
         binding.commit()
       } catch (error) {
+        if (!delivered && findPromptRequest(agent, request.requestId) === undefined) {
+          this.clearPendingPromptRequest(agent.session, request.requestId)
+        }
         if (remoteErrorOf(error) !== undefined) throw error
         if (error instanceof AttachmentError) {
           throw new RemoteError('session/attachment-invalid', error.message, { reason: error.code })
@@ -380,8 +457,39 @@ export class SessionCommandController {
         throw new RemoteError('session/agent-busy', 'prompt rejected', { reason: String(error) })
       }
       return { accepted: true }
+    })
+  }
+
+  private async resolvePromptModelSelection(
+    selection: NonNullable<SessionPromptRequest['modelSelection']>,
+  ): Promise<AgentModelSelection> {
+    try {
+      const resolved = await this.ctx.llm.resolveCallConfig({
+        provider: selection.provider,
+        model: selection.model,
+        ...(selection.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
+      })
+      return {
+        provider: resolved.provider,
+        model: resolved.model,
+        ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }),
+      }
+    } catch (error) {
+      if (remoteErrorOf(error) !== undefined) throw error
+      throw new RemoteError(
+        'session/model-unavailable',
+        error instanceof Error ? error.message : String(error),
+        { provider: selection.provider, model: selection.model },
+      )
     }
-    return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit()
+  }
+
+  private clearPendingPromptRequest(session: Session, requestId: SessionRequestId): void {
+    const pending = this.pendingPromptRequestIds.get(session)
+    pending?.delete(requestId)
+    if (pending?.size === 0) this.pendingPromptRequestIds.delete(session)
   }
 
   /**
@@ -521,8 +629,51 @@ export class SessionCommandController {
     if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
       throw apiSessionSubagentOwnershipError(request.sessionId)
     }
+    if (request.turn !== undefined) {
+      if (!Number.isSafeInteger(request.turn) || request.turn < 1) {
+        throw new RemoteError(
+          'gateway/bad-request',
+          'turn must be a positive safe integer',
+          { issues: [{ reason: 'INVALID_CANCEL_TURN' }] },
+        )
+      }
+      return {
+        accepted: true,
+        cancelled: agent.cancelActiveTurn?.(request.turn, { kind: 'user' }, { keepInbox: true }) ?? false,
+      }
+    }
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return { accepted: true }
+  }
+
+  /**
+   * Remove one queued prompt or request cancellation of its exact active turn.
+   * @param request - Session and original accepted prompt identity.
+   * @returns the action admitted; callers follow durable events for final settlement.
+   */
+  async cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue> {
+    const agent = await this.resolveAgent(request.sessionId)
+    if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
+      throw apiSessionSubagentOwnershipError(request.sessionId)
+    }
+    return this.agents.serializeRequestAdmission<SessionCancelPromptValue>(agent, () => {
+      const queued = [...agent.inbox.nextTurn, ...agent.inbox.nextStep]
+        .find(message => isPromptRequestSource(message.source, request.requestId))
+      if (queued !== undefined) {
+        agent.inbox.remove(queued.id)
+        this.ctx.fileUploads.retirePrompt(agent, request.requestId)
+        return { accepted: true, status: 'removed' }
+      }
+      if (findPromptRequest(agent, request.requestId) === undefined) {
+        return { accepted: true, status: 'not-found' }
+      }
+      const turn = findPromptClaimTurn(agent.session, request.requestId)
+      if (turn === undefined) return { accepted: true, status: 'not-active' }
+      if (agent.cancelActiveTurn === undefined) return { accepted: true, status: 'unsupported' }
+      return agent.cancelActiveTurn(turn, { kind: 'user' }, { keepInbox: true })
+        ? { accepted: true, status: 'cancellation-requested', turn }
+        : { accepted: true, status: 'not-active' }
+    })
   }
 
   private async resolveAgent(sessionId: SessionId): Promise<Agent> {
@@ -600,18 +751,132 @@ function resolvePromptFileReceipts(
   return { content: resolved, receiptIds: [...receiptIds] }
 }
 
-function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
-  const matches = (message: UserMessage): boolean => {
-    const source = message.source
-    return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+interface PromptRequestIdentity {
+  readonly requestDigest?: string
+}
+
+function assertPromptRequestDigest(existing: PromptRequestIdentity, incomingDigest: string): void {
+  if (existing.requestDigest === incomingDigest) return
+  throwPromptRequestConflict()
+}
+
+function throwPromptRequestConflict(): never {
+  throw new RemoteError(
+    'gateway/bad-request',
+    'requestId is already bound to a different or unverifiable prompt',
+    { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+  )
+}
+
+function findPromptRequest(agent: Agent, requestId: SessionRequestId): PromptRequestIdentity | undefined {
+  let found: PromptRequestIdentity | undefined
+  const inspect = (source: MessageSource): void => {
+    if (source.kind !== 'user' || !('rpcId' in source) || source.rpcId !== requestId) return
+    const requestDigest = 'requestDigest' in source ? source.requestDigest : undefined
+    const identity: PromptRequestIdentity = requestDigest === undefined ? {} : { requestDigest }
+    if (found !== undefined && found.requestDigest !== identity.requestDigest) throwPromptRequestConflict()
+    found = identity
   }
-  if (agent.inbox.nextTurn.some(matches) || agent.inbox.nextStep.some(matches)) return true
+  for (const message of [...agent.inbox.nextTurn, ...agent.inbox.nextStep]) {
+    inspect(message.source)
+  }
   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-  return agent.session.snapshotEvents().some((event) => {
-    if (event.type !== 'user/message') return false
-    const source = event.data.source
-    return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+  for (const event of agent.session.snapshotEvents()) {
+    if (event.type === 'user/message') {
+      inspect(event.data.source)
+    } else if (event.type === 'agent/inbox/spliced') {
+      // Removal retires queued work, not the identity of its accepted request.
+      for (const message of event.data.inserted) inspect(message.source)
+    }
+  }
+  return found
+}
+
+/** Identify a prompt independently of provider-generated or uncorrelated input. */
+function isPromptRequestSource(source: MessageSource, requestId: SessionRequestId): boolean {
+  return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
+}
+
+/** Recover the owning turn even while claimed input is waiting at pre-step admission. */
+function findPromptClaimTurn(session: Session, requestId: SessionRequestId): number | undefined {
+  const queues: Record<'next-turn' | 'next-step', UserMessage[]> = { 'next-turn': [], 'next-step': [] }
+  let currentTurn: number | undefined
+  let targetTurn: number | undefined
+  // oxlint-disable-next-line typescript/no-deprecated -- Exact durable Inbox claim history has no read projection.
+  for (const event of session.snapshotEvents()) {
+    if (event.type === 'turn/start') {
+      currentTurn = event.data.turn
+    } else if (event.type === 'user/message' && isPromptRequestSource(event.data.source, requestId)) {
+      targetTurn = currentTurn
+    } else if (event.type === 'agent/inbox/spliced') {
+      const splice = event.data
+      const removed = queues[splice.target].splice(splice.start, splice.removedCount ?? 0, ...splice.inserted)
+      if (splice.outcome !== 'canceled'
+        && removed.some(message => isPromptRequestSource(message.source, requestId))) {
+        targetTurn = currentTurn
+      }
+    }
+  }
+  return targetTurn
+}
+
+function snapshotPromptRequestContext(value: JsonValue | undefined): JsonValue | undefined {
+  if (value === undefined) return undefined
+  const snapshot = snapshotJsonValue(value)
+  let bounded = false
+  try {
+    bounded = snapshot !== undefined && Buffer.byteLength(JSON.stringify(snapshot), 'utf8') <= 8192
+  } catch {
+    // Deep JSON can exceed the encoder's recursion limit; reject it without admitting work.
+  }
+  if (!bounded) {
+    throw new RemoteError(
+      'gateway/bad-request',
+      'requestContext must be lossless JSON of at most 8192 UTF-8 bytes',
+      { issues: [{ reason: 'INVALID_REQUEST_CONTEXT' }] },
+    )
+  }
+  return snapshot
+}
+
+function promptRequestDigest(
+  request: SessionPromptRequest,
+  clientTimeZone: string | undefined,
+  selection: { readonly provider: string; readonly model: string; readonly reasoningEffort?: string },
+  requestContext: JsonValue | undefined,
+): string {
+  const content = request.content.map((part) => {
+    switch (part.type) {
+      case 'text':
+        return { type: part.type, text: part.text }
+      case 'image':
+        return {
+          type: part.type,
+          mediaType: part.mediaType,
+          data: part.data,
+          name: part.name ?? null,
+        }
+      case 'file':
+        return { type: part.type, receiptId: String(part.receiptId) }
+      /* v8 ignore next -- closed-union exhaustiveness guard; RPC schema validates prompt content kinds. */
+      default:
+        return assertNever(part)
+    }
   })
+  const canonical = JSON.stringify({
+    sessionId: String(request.sessionId),
+    mode: request.mode,
+    content,
+    clientTimeZone: clientTimeZone ?? null,
+    modelSelection: {
+      provider: selection.provider,
+      model: selection.model,
+      reasoningEffort: selection.reasoningEffort ?? null,
+    },
+    requestContextDigest: request.requestContextDigest ?? null,
+    ...(requestContext === undefined ? {} : { requestContext }),
+  })
+  return createHash('sha256').update(canonical).digest('hex')
 }
 function imageBlockIn(
   content: unknown,

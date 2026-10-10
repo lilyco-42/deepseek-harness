@@ -8,15 +8,15 @@ import type {
 } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
-import { describe, expect, it, vi } from 'vitest'
-import type { ApiSessionAgentController } from '../src/agent.ts'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SessionCommandController } from '../src/commands.ts'
 import type { SessionRequestId } from '../src/types.ts'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 const SESSION = SessionId('upload-session')
 
@@ -26,6 +26,7 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
   uploads: FileUploads
   agent: Agent
   followup: ReturnType<typeof vi.fn>
+  selectForNextRequest: ReturnType<typeof vi.fn>
   saveFile: ReturnType<typeof vi.fn>
   saveFileStream: ReturnType<typeof vi.fn>
   saveImages: ReturnType<typeof vi.fn>
@@ -84,17 +85,36 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
   } as never)
   ctx.provide('llm', {
     listProviders: () => [{ id: 'fixture', name: 'Fixture' }],
+    resolveCallConfig: (input: { provider: string; model: string; reasoningEffort?: string }) =>
+      Promise.resolve({ ...input }),
     resolveModelInfo: () => Promise.resolve({ provider: 'fixture', id: 'fixture-model', name: 'Fixture' }),
   } as never)
-  const selection: ModelSelectionRef = {
+  const selection: Omit<ModelSelectionRef, 'current'> & {
+    current: NonNullable<ModelSelectionRef['current']>
+    consume: (_provider: string, _model: string, _reasoningEffort: string | undefined) => boolean
+  } = {
     current: { provider: 'fixture', model: 'fixture-model' },
     assembled: undefined,
+    consume: () => false,
   }
+  const admissionChains = new WeakMap<Agent, Promise<void>>()
+  const selectForNextRequest = vi.fn((_target: Agent, next: NonNullable<ModelSelectionRef['current']>) => {
+    selection.current = next
+  })
   const agents = {
     resolveAgent: () => Promise.resolve({ agent }),
+    ensureSession: () => { throw new Error('Unexpected ensureSession call in upload test') },
+    presetForObservation: () => { throw new Error('Unexpected presetForObservation call in upload test') },
+    presetForSession: () => { throw new Error('Unexpected presetForSession call in upload test') },
+    selectForNextRequest,
+    composeAgent: () => { throw new Error('Unexpected composeAgent call in upload test') },
     selectionFor: () => selection,
-    serializeImageAdmission: <Value>(_agent: Agent, operation: () => Promise<Value>) => operation(),
-  } as unknown as ApiSessionAgentController
+    serializeRequestAdmission: <Value>(target: Agent, operation: () => Promise<Value>) => {
+      const result = (admissionChains.get(target) ?? Promise.resolve()).then(operation)
+      admissionChains.set(target, result.then(() => undefined, () => undefined))
+      return result
+    },
+  }
   const uploads = new FileUploads(ctx)
   if (uploadRoute === undefined) throw new Error('file upload route was not registered')
   return {
@@ -103,6 +123,7 @@ async function uploadHarness(origin?: 'subagent'): Promise<{
     uploads,
     agent,
     followup,
+    selectForNextRequest,
     saveFile,
     saveFileStream,
     saveImages,
@@ -118,6 +139,15 @@ function promptRequest(content: Parameters<SessionCommandController['prompt']>[0
     mode: 'queue' as const,
     content,
   }
+}
+
+function emitTurnEnd(ctx: Context, agent: Agent): void {
+  ctx.emit('session/event', agent.session, {
+    type: 'turn/end',
+    seq: SessionSeq(1),
+    time: Date.now(),
+    data: { turn: 1, reason: { kind: 'completed' } },
+  })
 }
 
 describe('Session file uploads', () => {
@@ -341,20 +371,422 @@ describe('Session file uploads', () => {
     expect(followup).toHaveBeenCalledOnce()
   })
 
+  it('deduplicates concurrent retries while an accepted image prompt is not durable yet', async () => {
+    const { controller, saveImages, followup } = await uploadHarness()
+    const admitted = Promise.withResolvers<readonly ImageAttachmentRef[]>()
+    saveImages.mockReturnValueOnce(admitted.promise)
+    const image: ImageAttachmentRef = {
+      attachmentId: AttachmentId('concurrent-image'),
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 1,
+    }
+    const request = promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }])
+
+    const first = controller.prompt(request)
+    await vi.waitFor(() => { expect(saveImages).toHaveBeenCalledOnce() })
+    const retry = controller.prompt(request)
+    admitted.resolve([image])
+
+    await expect(Promise.all([first, retry])).resolves.toEqual([
+      { accepted: true },
+      { accepted: true },
+    ])
+    expect(saveImages).toHaveBeenCalledOnce()
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a concurrent request id reused with different content', async () => {
+    const { controller, saveImages, followup } = await uploadHarness()
+    const admitted = Promise.withResolvers<readonly ImageAttachmentRef[]>()
+    saveImages.mockReturnValueOnce(admitted.promise)
+    const image: ImageAttachmentRef = {
+      attachmentId: AttachmentId('concurrent-image'),
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 1,
+    }
+    const request = promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }])
+
+    const first = controller.prompt(request)
+    await vi.waitFor(() => { expect(saveImages).toHaveBeenCalledOnce() })
+    const changed = controller.prompt({
+      ...request,
+      content: [{ type: 'text', text: 'different request' }],
+    })
+    admitted.resolve([image])
+
+    await expect(first).resolves.toEqual({ accepted: true })
+    await expect(changed).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(saveImages).toHaveBeenCalledOnce()
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a durable request id reused with another prompt, model or Agent context', async () => {
+    const { controller, followup, selectForNextRequest } = await uploadHarness()
+    const request = {
+      ...promptRequest([{ type: 'text', text: 'same prompt' }]),
+      modelSelection: { provider: 'fixture', model: 'first-model' },
+      requestContextDigest: 'a'.repeat(64),
+    }
+    await controller.prompt(request)
+    expect((followup.mock.calls[0]?.[0] as UserMessage).source).toHaveProperty('requestDigest')
+
+    await expect(controller.prompt({
+      ...request,
+      content: [{ type: 'text', text: 'different prompt' }],
+    })).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    await expect(controller.prompt({
+      ...request,
+      modelSelection: { provider: 'fixture', model: 'different-model' },
+    })).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    await expect(controller.prompt({
+      ...request,
+      requestContextDigest: 'b'.repeat(64),
+    })).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).toHaveBeenCalledOnce()
+    expect(selectForNextRequest).toHaveBeenCalledOnce()
+  })
+
+  it('logs application request context and rejects permission changes on the same identity', async () => {
+    const { ctx, controller, followup } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const request = {
+      ...promptRequest([{ type: 'text', text: 'Read public sources only.' }]),
+      requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
+    }
+    await controller.prompt(request)
+    expect((followup.mock.calls[0]?.[0] as UserMessage).source).toMatchObject({
+      kind: 'user',
+      requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
+    })
+    const changed = {
+      ...request,
+      requestContext: { lain42: { version: 1, toolScope: 'account-read' } },
+    }
+    await expect(controller.prompt(changed)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('retains context and retry identity across command-owner replacement', async () => {
+    const first = await uploadHarness()
+    const second = await uploadHarness()
+    onTestFinished(async () => {
+      await first.ctx.fiber.dispose()
+      await second.ctx.fiber.dispose()
+    })
+    const request = {
+      ...promptRequest([{ type: 'text', text: 'Public sources only' }]),
+      requestContext: { lain42: { version: 1, toolScope: 'public-only' } },
+    }
+    await first.controller.prompt(request)
+    const original = first.followup.mock.calls[0]?.[0] as UserMessage
+    second.agent.session.append('user/message', original, { surfaceOp: 'append' })
+    await expect(second.controller.prompt(request)).resolves.toEqual({ accepted: true })
+    await expect(second.controller.prompt({ ...request, requestContext: null })).rejects.toMatchObject({
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    await expect(second.controller.prompt({
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      mode: request.mode,
+      content: request.content,
+    })).rejects.toMatchObject({
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(second.followup).not.toHaveBeenCalled()
+    expect(second.selectForNextRequest).not.toHaveBeenCalled()
+  })
+
+  it('snapshots context before asynchronous attachment admission', async () => {
+    const { ctx, controller, saveImages, followup } = await uploadHarness()
+    const admitted = Promise.withResolvers<readonly ImageAttachmentRef[]>()
+    saveImages.mockReturnValueOnce(admitted.promise)
+    const requestContext = { lain42: { version: 1, toolScope: 'public-only' } }
+    const request = {
+      ...promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }]),
+      requestContext,
+    }
+    const pending = controller.prompt(request)
+    onTestFinished(async () => {
+      admitted.resolve([])
+      try { await pending }
+      catch { /* An early test failure can release admission without image bytes. */ }
+      finally { await ctx.fiber.dispose() }
+    })
+    await vi.waitFor(() => { expect(saveImages).toHaveBeenCalledOnce() })
+    requestContext.lain42.toolScope = 'account-read'
+    const retry = controller.prompt(request)
+    admitted.resolve([{
+      attachmentId: AttachmentId('context-image'), mediaType: 'image/png',
+      bytes: 3, width: 1, height: 1,
+    }])
+    await expect(pending).resolves.toEqual({ accepted: true })
+    await expect(retry).rejects.toMatchObject({
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect((followup.mock.calls[0]?.[0] as UserMessage).source).toHaveProperty(
+      'requestContext', { lain42: { version: 1, toolScope: 'public-only' } },
+    )
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it.each<{ value: JsonValue }>([
+    { value: null }, { value: false }, { value: 1 },
+    { value: ['public', { enabled: true }] },
+    { value: 'x'.repeat(8190) }, { value: '界'.repeat(2730) },
+  ])(
+    'logs bounded JSON context without changing prompt content (%#)', async ({ value: requestContext }) => {
+      const { ctx, controller, followup } = await uploadHarness()
+      onTestFinished(async () => { await ctx.fiber.dispose() })
+      const content = [{ type: 'text' as const, text: 'Only this text enters the prompt' }]
+      await controller.prompt({ ...promptRequest(content), requestContext })
+      const message = followup.mock.calls[0]?.[0] as UserMessage
+      expect(message.source).toHaveProperty('requestContext', requestContext)
+      expect(message.content).toEqual(content)
+    },
+  )
+
+  it('rejects lossy or oversized context before selecting a model or delivering work', async () => {
+    const { ctx, controller, followup, selectForNextRequest } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const cycle: { [key: string]: JsonValue } = {}
+    cycle['self'] = cycle
+    let nested: JsonValue = null
+    for (let depth = 0; depth < 20_000; depth++) nested = [nested]
+    for (const requestContext of [NaN, Infinity, cycle, nested, 'x'.repeat(8191), '界'.repeat(2731)]) {
+      await expect(controller.prompt({
+        ...promptRequest([{ type: 'text', text: 'Do not admit invalid metadata' }]),
+        requestContext,
+        modelSelection: { provider: 'fixture', model: 'other-model' },
+      })).rejects.toMatchObject({
+        code: 'gateway/bad-request', details: { issues: [{ reason: 'INVALID_REQUEST_CONTEXT' }] },
+      })
+    }
+    expect(followup).not.toHaveBeenCalled()
+    expect(selectForNextRequest).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed context digests and unserved prompt model selections before delivery', async () => {
+    const { controller, followup, selectForNextRequest } = await uploadHarness()
+    const base = promptRequest([{ type: 'text', text: 'valid prompt' }])
+
+    await expect(controller.prompt({ ...base, requestContextDigest: 'not-a-digest' })).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'INVALID_REQUEST_CONTEXT_DIGEST' }] },
+    })
+    await expect(controller.prompt({
+      ...base,
+      modelSelection: { provider: 'not-served', model: 'missing-model' },
+    })).rejects.toMatchObject({
+      code: 'session/model-unavailable',
+      details: { provider: 'not-served', model: 'missing-model' },
+    })
+    expect(followup).not.toHaveBeenCalled()
+    expect(selectForNextRequest).not.toHaveBeenCalled()
+  })
+
+  it('rejects a durable request id already bound to conflicting messages', async () => {
+    const { controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'same prompt' }])
+    for (const requestDigest of ['a'.repeat(64), 'b'.repeat(64)]) {
+      agent.session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: 'same prompt' }],
+        source: { kind: 'user', rpcId: request.requestId, requestDigest },
+      }), { surfaceOp: 'append' })
+    }
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
+  it('keeps a pending request id through turn end while its message is still queued', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    followup.mockImplementation((message: UserMessage) => { agent.inbox.append('next-step', message) })
+
+    await controller.prompt(request)
+    emitTurnEnd(ctx, agent)
+    agent.inbox.clear()
+
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('retires pending request ids at turn end when no queued source matches', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    await controller.prompt(request)
+    agent.inbox.append('next-turn', createUserMessage({
+      content: [],
+      source: { kind: 'model', provider: 'fixture', model: 'fixture-model' },
+    }))
+    agent.inbox.append('next-turn', createUserMessage({ content: [], source: { kind: 'user' } }))
+    agent.inbox.append('next-step', createUserMessage({
+      content: [],
+      source: { kind: 'user', rpcId: 42 as never },
+    }))
+
+    emitTurnEnd(ctx, agent)
+
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears pending request ids when the Agent has been disposed before turn end', async () => {
+    const { ctx, controller, agent, disposeAgent } = await uploadHarness()
+    await controller.prompt(promptRequest([{ type: 'text', text: 'once' }]))
+    await disposeAgent()
+
+    expect(() => { emitTurnEnd(ctx, agent) }).not.toThrow()
+  })
+
+  it('retains a pending id when delivery enqueues the prompt before rejecting', async () => {
+    const { controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
+    followup.mockImplementationOnce((message: UserMessage) => {
+      agent.inbox.append('next-turn', message)
+      throw new Error('rejected after enqueue')
+    })
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({ code: 'session/agent-busy' })
+    agent.inbox.clear()
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('releases a request id when Agent admission rejects before delivery', async () => {
+    const { controller, saveImages, followup } = await uploadHarness()
+    const image: ImageAttachmentRef = {
+      attachmentId: AttachmentId('retry-image'),
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 1,
+      height: 1,
+    }
+    saveImages.mockResolvedValue([image])
+    followup.mockImplementationOnce(() => { throw new Error('busy') })
+    const request = promptRequest([{ type: 'image', mediaType: 'image/png', data: 'AAAA' }])
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({ code: 'session/agent-busy' })
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(saveImages).toHaveBeenCalledTimes(2)
+    expect(followup).toHaveBeenCalledTimes(2)
+  })
+
   it('deduplicates a retried rpcId already present in the durable log', async () => {
     const { controller, agent, followup } = await uploadHarness()
     const request = promptRequest([{ type: 'text', text: 'once' }])
+    await controller.prompt(request)
+    const admitted = followup.mock.calls[0]?.[0] as UserMessage
     agent.session.append('turn/start', { turn: 1 })
+    agent.session.append('user/message', admitted, { surfaceOp: 'append' })
+
+    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it.each(['next-turn', 'next-step'] as const)(
+    'keeps a removed %s prompt identity after pending admission memory retires',
+    async (target) => {
+      const { ctx, controller, agent, followup } = await uploadHarness()
+      onTestFinished(async () => { await ctx.fiber.dispose() })
+      const request = promptRequest([{ type: 'text', text: 'do not resurrect this request' }])
+      await controller.prompt(request)
+      const admitted = followup.mock.calls[0]?.[0] as UserMessage
+      agent.session.append('agent/inbox/spliced', { target, start: 0, inserted: [admitted] })
+      agent.inbox.append(target, admitted)
+      await controller.updateQueue({ sessionId: SESSION, itemId: admitted.id, action: { kind: 'remove' } })
+      agent.session.append('agent/inbox/spliced', {
+        target, start: 0, removedCount: 1, inserted: [], outcome: 'canceled',
+      })
+      emitTurnEnd(ctx, agent)
+
+      await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+      expect(followup).toHaveBeenCalledOnce()
+      expect(agent.inbox.nextTurn).toEqual([])
+      expect(agent.inbox.nextStep).toEqual([])
+      await expect(controller.prompt({
+        ...request, content: [{ type: 'text', text: 'changed after removal' }],
+      })).rejects.toMatchObject({
+        code: 'gateway/bad-request',
+        details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+      })
+      expect(followup).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('rejects a removed legacy queue identity without an original digest', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const request = promptRequest([{ type: 'text', text: 'legacy queued prompt' }])
+    const queued = createUserMessage({
+      content: [{ type: 'text', text: 'legacy queued prompt' }],
+      source: { kind: 'user', rpcId: request.requestId },
+    })
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [queued] })
+    agent.session.append('agent/inbox/spliced', {
+      target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled',
+    })
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
+  it('rejects conflicting queue and user-message digests for one request id', async () => {
+    const { ctx, controller, agent, followup } = await uploadHarness()
+    onTestFinished(async () => { await ctx.fiber.dispose() })
+    const request = promptRequest([{ type: 'text', text: 'original queued prompt' }])
+    await controller.prompt(request)
+    const admitted = followup.mock.calls[0]?.[0] as UserMessage
+    agent.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [admitted] })
     agent.session.append('user/message', createUserMessage({
-      content: [{ type: 'text', text: 'unidentified' }],
-      source: { kind: 'user' },
+      content: [{ type: 'text', text: 'conflicting prompt' }],
+      source: { kind: 'user', rpcId: request.requestId, requestDigest: 'b'.repeat(64) },
     }), { surfaceOp: 'append' })
+
+    await expect(controller.prompt(request)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
+    expect(followup).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a legacy durable request id whose original payload cannot be verified', async () => {
+    const { controller, agent, followup } = await uploadHarness()
+    const request = promptRequest([{ type: 'text', text: 'once' }])
     agent.session.append('user/message', createUserMessage({
-      content: [{ type: 'text', text: 'accepted' }],
+      content: [{ type: 'text', text: 'once' }],
       source: { kind: 'user', rpcId: request.requestId },
     }), { surfaceOp: 'append' })
 
-    await expect(controller.prompt(request)).resolves.toEqual({ accepted: true })
+    await expect(controller.prompt(request)).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+      details: { issues: [{ reason: 'REQUEST_ID_CONFLICT' }] },
+    })
     expect(followup).not.toHaveBeenCalled()
   })
 

@@ -1,0 +1,12 @@
+{
+  "en": {
+    "summary": "Adds optional opaque application request metadata to the persisted user RPC source.",
+    "compatibility": "Existing user sources remain readable and requests without metadata retain their original identity digest. Metadata is bounded lossless JSON, copied before admission and included in retry identity. It is not prompt text and does not grant capabilities by itself. Older readers may ignore the optional field; an application using it for permissions must require a matching policy consumer rather than treating an older reader as an authorization check.",
+    "verification": "The Actions request-lifecycle lane exercises unchanged replay, changed or omitted metadata rejection, command-owner replacement, mutation during asynchronous admission, exact UTF-8 size limits and malformed JSON rejection. Current results must be checked on the candidate commit; this record does not assert that pending CI has passed."
+  },
+  "zh": {
+    "summary": "在持久化的用户 RPC 消息来源中增加可选的不透明应用请求元数据。",
+    "compatibility": "已有用户来源仍可读取，未提供元数据的请求保留原身份摘要。元数据为有界无损 JSON，在准入前复制并计入重试身份；它不是提示文本，也不自行授予能力。旧读取方可忽略此可选字段；将它用于权限的应用必须要求匹配的策略消费方，不能把旧读取方当作授权检查。",
+    "verification": "Actions 的 request-lifecycle 任务检查原样重试、改变或省略元数据时拒绝、命令所有者替换、异步准入时修改输入、UTF-8 大小边界和不合法 JSON 拒绝。须核对候选提交的当前结果；本记录不宣称等待中的 CI 已通过。"
+  }
+}

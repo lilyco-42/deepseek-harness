@@ -20,13 +20,103 @@ concurrency:
 
 jobs:
 
+  request-lifecycle:
+    if: github.event_name == 'pull_request' && github.repository == 'lilyco-42/deepseek-harness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    name: node 24 / request lifecycle
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Generate request-policy dependency lock for review
+        run: pnpm install --lockfile-only --ignore-scripts
+      - name: Upload generated dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: request-policy-lock-${{ github.sha }}
+          path: pnpm-lock.yaml
+          if-no-files-found: error
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+      - name: Generate cancellation contract references
+        run: |
+          pnpm run gen-cordis-catalog
+          pnpm run gen-doc-graphs
+          pnpm run gen-module-graph
+          pnpm run gen-persistence-catalog
+          if [ ! -f docs/persistence-changes/2026-10-03-request-context.md ]; then
+            pnpm --silent run persistence-changes --record 2026-10-03-request-context --prose .github/lain42-request-context-prose.json --json
+          fi
+          pnpm run verify-translation-pairing --write packages/bundle/web-app/README.md
+          pnpm run verify-translation-pairing --write packages/api/session-controller/README.md
+          pnpm run verify-translation-pairing --write docs/event-producer-consumer.md
+      - name: Upload generated cancellation references
+        uses: actions/upload-artifact@v4
+        with:
+          name: request-lifecycle-generated-${{ github.sha }}
+          path: |
+            packages/extensions/tool-cordis/src/api-catalog.ts
+            docs/subsystems/session.md
+            docs/subsystems/session.zh.md
+            docs/subsystems/session.i18n.yaml
+            docs/event-producer-consumer.md
+            docs/event-producer-consumer.zh.md
+            docs/event-producer-consumer.i18n.yaml
+            docs/module-graph.md
+            docs/module-graph.zh.md
+            docs/module-graph.i18n.yaml
+            docs/persistence-schema.json
+            docs/persistence-catalog.md
+            docs/persistence-catalog.zh.md
+            docs/persistence-catalog.i18n.yaml
+            packages/bundle/web-app/README.i18n.yaml
+            packages/api/session-controller/README.i18n.yaml
+            docs/persistence-changes/2026-10-03-request-context.*
+          if-no-files-found: error
+      - name: Build required native system dependency
+        run: pnpm run build:native-system
+      - name: Verify accepted model settings and owner coverage
+        run: >-
+          pnpm exec vitest run --coverage
+          --coverage.include=packages/client/ui-settings-models/src/client/operations.ts
+          packages/client/ui-settings-models/tests
+      - name: Verify original-request cancellation and replay
+        run: >-
+          pnpm exec vitest run
+          packages/api/session-controller/tests/commands-queue-attachment.host.spec.ts
+          packages/api/session-controller/tests/commands-queue-replay.host.spec.ts
+          packages/api/session-controller/tests/commands-upload-file.host.spec.ts
+          packages/api/session-controller/tests/controller.host.spec.ts
+          packages/bundle/web-app/tests/lain42-bridge.spec.ts
+          packages/bundle/web-app/tests/lain42-request-policy.spec.ts
+          packages/bundle/web-app/tests/lain42-tools.spec.ts
+          packages/bundle/web-app/tests/lain42-preset-composition.spec.ts
+      - name: Build and verify shipped request-policy execution
+        run: |
+          pnpm run build
+          pnpm exec vitest run --config vitest.expected.config.ts apps/cli/tests/profiles/web/tests/lain42-issue-read.expected.e2e.ts apps/cli/tests/profiles/web/tests/lain42-cancellation.expected.e2e.ts
+      - name: Verify request-policy owner coverage
+        run: >-
+          pnpm exec vitest run --coverage
+          --coverage.include=packages/bundle/web-app/src/lain42-request-policy.ts
+          --coverage.include=packages/bundle/web-app/src/lain42-tools.ts
+          packages/bundle/web-app/tests/lain42-request-policy.spec.ts
+          packages/bundle/web-app/tests/lain42-tools.spec.ts
+          packages/bundle/web-app/tests/lain42-preset-composition.spec.ts
+
   # Three enterprise jobs isolate coverage, static analysis, and the
   # build-backed consumer tail. The consumer job owns the only Linux build so
   # all three jobs enter runner allocation independently.
   #
   # FAILOVER (Linux): each Linux enterprise job resolves its pool through the
-  # DSH_CI_FAILOVER_LINUX repository variable. Unset (normal), the expressions
-  # pick the hosted enterprise pools below. Setting the variable to
+  # DSH_CI_FAILOVER_LINUX repository variable. Unset (normal), upstream selects
+  # the hosted enterprise pools below; forks use GitHub-hosted VMs because they
+  # do not inherit upstream runner registrations. Setting the variable to
   # 'selfhosted' (repo Settings → Actions → Variables; writer-manageable
   # repository state — not PR-editable, no merge required) retargets all
   # three onto the in-house
@@ -46,7 +136,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
-          || 'dsh-ubuntu-24-04-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-ubuntu-24-04-16core'
+          || 'ubuntu-24.04' }}
     name: node 24 / static
     env:
       # Shared hosts expose host CPUs, not an isolated allocation.
@@ -103,9 +194,65 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run static gates
+        id: static
         env:
           DSH_ARCHIVE_BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: pnpm run check:ci:static
+
+      - name: Regenerate config catalog for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-config-catalog
+
+      - name: Regenerate Cordis reference for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-cordis-catalog
+
+      - name: Upload regenerated Cordis reference
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cordis-reference-generated-${{ github.sha }}
+          path: |
+            docs/subsystems/*.md
+            docs/subsystems/*.yaml
+            docs/cordis-api/inherited.md
+            packages/extensions/tool-cordis/src/api-catalog.ts
+          if-no-files-found: error
+
+      - name: Upload regenerated config catalog
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-catalog-generated-${{ github.sha }}
+          path: docs/config-catalog.md
+          if-no-files-found: error
+
+      - name: Regenerate module graph for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-module-graph
+
+      - name: Upload regenerated module graph
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-graph-generated-${{ github.sha }}
+          path: |
+            docs/module-graph.md
+            docs/module-graph.zh.md
+            docs/module-graph.i18n.yaml
+          if-no-files-found: error
+
+      - name: Regenerate event graph for a failing static gate
+        if: failure() && steps.static.outcome == 'failure'
+        run: pnpm run gen-doc-graphs
+
+      - name: Upload regenerated event producer-consumer graph
+        if: failure() && steps.static.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-graph-generated-${{ github.sha }}
+          path: docs/event-producer-consumer.md
+          if-no-files-found: error
 
   node-24-coverage:
     if: github.event_name == 'pull_request'
@@ -114,7 +261,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
-          || 'dsh-ubuntu-24-04-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-ubuntu-24-04-16core'
+          || 'ubuntu-24.04' }}
     name: node 24 / coverage
     env:
       # Shared hosts expose host CPUs, not an isolated allocation.
@@ -243,7 +391,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_LINUX == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
-          || 'dsh-ubuntu-24-04-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-ubuntu-24-04-16core'
+          || 'ubuntu-24.04' }}
     name: node 24 / snapshots and artifacts
     env:
       # Shared hosts expose host CPUs, not an isolated allocation.
@@ -361,7 +510,20 @@ jobs:
         run: CI=true pnpm run prepare:primary-runtime --target linux-x64 --output "$RUNNER_TEMP/office-runtime" --cache "$RUNNER_TEMP/office-runtime-downloads"
 
       - name: Run compatibility, snapshot, and artifact gates
+        id: consumers
         run: pnpm run check:ci:consumers
+
+      - name: Refresh ACP diagnostic session after a consumer failure
+        if: failure() && steps.consumers.outcome == 'failure'
+        run: DSH_SNAPSHOT=refresh pnpm exec vitest run --config vitest.snapshot.config.ts --update snapshots/session/headless.snapshot.ts -t 'subagent-acp-diagnostic through dsh'
+
+      - name: Upload refreshed ACP diagnostic session
+        if: failure() && steps.consumers.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: subagent-acp-diagnostic-recorded-${{ github.sha }}
+          path: snapshots/session/subagent-acp-diagnostic/session.v3.jsonl
+          if-no-files-found: error
 
 
   node-compat:
@@ -507,7 +669,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
-          || 'dsh-windows-2025-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-windows-2025-16core'
+          || 'windows-2025' }}
     name: windows node 24 / build & observational
     timeout-minutes: 60
     env:
@@ -569,7 +732,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
-          || 'dsh-windows-2025-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-windows-2025-16core'
+          || 'windows-2025' }}
     name: windows node 24 / coverage
     timeout-minutes: 120
     env:
@@ -647,7 +811,8 @@ jobs:
           || vars.DSH_CI_FAILOVER_WINDOWS == 'selfhosted'
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "dsh-win-ci", "windows"]')
-          || 'dsh-windows-2025-16core' }}
+          || github.repository == 'deepseek-harness/deepseek-harness' && 'dsh-windows-2025-16core'
+          || 'windows-2025' }}
     name: windows node 24 / native tests
     timeout-minutes: 60
     steps:

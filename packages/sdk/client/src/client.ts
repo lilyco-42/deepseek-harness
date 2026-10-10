@@ -16,8 +16,12 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import {
   JsonRpcLineTransport,
   JsonRpcResponseError,
+  type SdkApprovalOutcome,
+  type SdkApprovalRequestParams,
   type InitializeParams,
   type InitializeResult,
+  type SessionCancelParams,
+  type SessionCloseParams,
   type SessionPromptParams,
   type SdkPromptContentBlock,
 } from '@deepseek-ai/dsh-sdk-protocol'
@@ -178,9 +182,8 @@ class NotificationSubscriptionImpl implements NotificationSubscription {
  *
  * The subprocess starts lazily on {@link start} and is owned by this instance
  * until {@link close}, which requests protocol `shutdown` and then walks the
- * shared EOF → SIGTERM → SIGKILL dispose ladder to quiescence. There is no
- * wire-level cancel: a timed-out request stays running server-side until the
- * runtime is closed.
+ * shared EOF → SIGTERM → SIGKILL dispose ladder to quiescence. Session
+ * cancellation and close remain scoped to SDK-created agents.
  */
 export class HarnessClient {
   /** Original public dsh launch and timeout options for this client. */
@@ -263,6 +266,12 @@ export class HarnessClient {
       this.transport?.close()
     })
     const transport = new JsonRpcLineTransport(child.stdout, child.stdin)
+    transport.onRequest(async (method, params, signal) => {
+      if (method !== 'approval/request') throw new SdkProtocolError(`unsupported runtime request: ${method}`)
+      const request = validateApprovalRequest(params)
+      const outcome = await this.options.onApprovalRequest?.(request, signal) ?? 'unavailable'
+      return { outcome: isApprovalOutcome(outcome) ? outcome : 'unavailable' }
+    })
     transport.onNotification((method, params) => { this.dispatchNotification({ method, params }) })
     transport.start()
     this.transport = transport
@@ -295,6 +304,27 @@ export class HarnessClient {
       throw new SdkProtocolError(`session/prompt returned no message id: ${JSON.stringify(result)}`)
     }
     return result.messageId
+  }
+
+  /**
+   * Cancel the current work for one SDK session.
+   * @param sessionId - the target session id.
+   * @returns settlement of the cancellation request.
+   */
+  async cancelSession(sessionId: string): Promise<void> {
+    const params: SessionCancelParams = { sessionId }
+    await this.request('session/cancel', params)
+  }
+
+  /**
+   * Dispose one live SDK agent without closing the runtime process; a later
+   * prompt with the same id can reopen its durable history.
+   * @param sessionId - the target session id.
+   * @returns settlement of the close request.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    const params: SessionCloseParams = { sessionId }
+    await this.request('session/close', params)
   }
 
   /**
@@ -467,12 +497,12 @@ export class HarnessClient {
 }
 
 /** Construct the transport against a generic process for package-local fake-runtime tests. */
-export function createProcessHarnessClient(options: RuntimeProcessOptions): HarnessClient {
+export function createProcessHarnessClient(runtime: RuntimeProcessOptions, options: HarnessClientOptions = {}): HarnessClient {
   const Constructor = HarnessClient as new (
     publicOptions: HarnessClientOptions,
     runtime: RuntimeProcessOptions,
   ) => HarnessClient
-  return new Constructor({}, options)
+  return new Constructor(options, runtime)
 }
 
 /**
@@ -488,4 +518,28 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   /* v8 ignore next -- the transport and dispose ladder reject only with Errors */
   return error instanceof Error ? error.message : String(error)
+}
+
+function isApprovalOutcome(value: unknown): value is SdkApprovalOutcome {
+  switch (value) {
+    case 'allowed-once':
+    case 'rejected':
+    case 'cancelled':
+    case 'unavailable': return true
+    default: return false
+  }
+}
+
+function validateApprovalRequest(value: Record<string, unknown>): SdkApprovalRequestParams {
+  if (typeof value.sessionId !== 'string' || typeof value.toolName !== 'string'
+    || (value.callId !== undefined && typeof value.callId !== 'string')
+    || (value.reason !== undefined && typeof value.reason !== 'string')) {
+    throw new SdkProtocolError('approval/request carried malformed parameters')
+  }
+  return {
+    sessionId: value.sessionId,
+    toolName: value.toolName,
+    ...(value.callId === undefined ? {} : { callId: value.callId }),
+    ...(value.reason === undefined ? {} : { reason: value.reason }),
+  }
 }

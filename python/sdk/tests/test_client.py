@@ -13,6 +13,89 @@ from deepseek_harness import DeepSeekHarness, HarnessClient, HarnessConfig, Noti
 from deepseek_harness.errors import JsonRpcError
 
 
+def test_session_cancel_and_close_use_runtime_protocol(tmp_path: Path) -> None:
+    script = tmp_path / "session_operations_runtime.py"
+    records = tmp_path / "session_operations.jsonl"
+    script.write_text(
+        """
+import json
+import os
+import sys
+
+records = os.environ["RECORDS"]
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        result = {"serverInfo": {"name": "deepseek-harness-sdk-runtime", "version": "0.0.1"}}
+    elif method in {"session/cancel", "session/close"}:
+        with open(records, "a", encoding="utf-8") as output:
+            output.write(json.dumps({"method": method, "params": message.get("params")}) + "\\n")
+        result = {}
+    elif method == "shutdown":
+        result = {}
+    else:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+    if method == "shutdown":
+        break
+""".strip()
+    )
+
+    client = HarnessClient(
+        HarnessConfig(cwd=str(tmp_path), env={"RECORDS": str(records)}),
+        _launch_args=(sys.executable, str(script)),
+    )
+    client.start()
+    client.initialize(cwd=str(tmp_path), provider="test", model="test")
+    client.session_cancel("owned")
+    client.session_close("owned")
+    client.close()
+
+    assert [json.loads(line) for line in records.read_text().splitlines()] == [
+        {"method": "session/cancel", "params": {"sessionId": "owned"}},
+        {"method": "session/close", "params": {"sessionId": "owned"}},
+    ]
+
+
+def test_incoming_approval_request_and_peer_cancellation_are_exposed_to_host(tmp_path: Path) -> None:
+    script = tmp_path / "approval_runtime.py"
+    script.write_text(
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {"serverInfo": {"name": "test", "version": "1"}}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": "approval-1", "method": "approval/request", "params": {"sessionId": "main", "toolName": "bash", "callId": "call-1", "reason": "workspace write"}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "method": "$/cancelRequest", "params": {"id": "approval-1"}}), flush=True)
+    elif method == "shutdown":
+        print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {}}), flush=True)
+        break
+""".strip()
+    )
+
+    client = HarnessClient(
+        HarnessConfig(cwd=str(tmp_path)),
+        _launch_args=(sys.executable, str(script)),
+    )
+    client.start()
+    client.initialize(cwd=str(tmp_path), provider="test", model="test")
+    request = client.next_request()
+    assert request.method == "approval/request"
+    assert request.payload == {
+        "sessionId": "main",
+        "toolName": "bash",
+        "callId": "call-1",
+        "reason": "workspace write",
+    }
+    assert request.cancelled.wait(timeout=1)
+    client.close()
+
+
 def test_high_level_sdk_runs_turn_and_preserves_auto_review_errors(tmp_path: Path) -> None:
     script = tmp_path / "fake_runtime.py"
     env_dump = tmp_path / "env.json"

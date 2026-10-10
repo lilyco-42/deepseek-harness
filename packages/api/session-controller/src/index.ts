@@ -35,6 +35,8 @@ import type {
   SessionAttachmentValue,
   SessionCancelRequest,
   SessionCancelValue,
+  SessionCancelPromptRequest,
+  SessionCancelPromptValue,
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
@@ -275,8 +277,8 @@ export class SessionController extends TypertRemoteService {
   }
 
   /**
-   * Select one Session-local model after explicitly resuming the Session.
-   * @param request - Session identity and requested model selection.
+   * Select one Session-local model and optionally save it as the deployment default.
+   * @param request - Session identity, requested model, and default-persistence choice.
    * @returns the normalized selection installed for the Session.
    */
   @Remote('selectModel')
@@ -438,6 +440,16 @@ export class SessionController extends TypertRemoteService {
   @Remote('cancel')
   cancel(request: SessionCancelRequest): SessionCancelValue {
     return this.commands.cancel(request)
+  }
+
+  /**
+   * Cancel only work belonging to one original accepted prompt.
+   * @param request - Session and original prompt identity.
+   * @returns admitted action, not a claim of completed turn settlement.
+   */
+  @Remote('cancelPrompt')
+  cancelPrompt(request: SessionCancelPromptRequest): Promise<SessionCancelPromptValue> {
+    return this.commands.cancelPrompt(request)
   }
 
   /**

@@ -16,12 +16,17 @@ jobs:
     name: Issue policy
     runs-on: ubuntu-latest
     steps:
+      - name: Skip upstream issue policy on forks
+        if: ${{ github.repository != 'deepseek-harness/deepseek-harness' }}
+        run: echo "Issue policy is scoped to deepseek-harness/deepseek-harness; skipping fork-local Project access."
       - name: Check out trusted policy
+        if: ${{ github.repository == 'deepseek-harness/deepseek-harness' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Determine policy eligibility
+        if: ${{ github.repository == 'deepseek-harness/deepseek-harness' }}
         id: preflight
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -34,13 +39,14 @@ jobs:
           import fs from 'node:fs'
           const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
           const automated = ['Bot', 'App'].includes(event.pull_request.user.type)
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `legacy-automated=${automated}\nneeds-project=${!automated}\n`)
-          console.log('Trusted policy has no selective preflight; preserving legacy policy enforcement.')
+          const exempt = automated || event.pull_request.draft === true
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `legacy-exempt=${exempt}\nneeds-project=${!exempt}\n`)
+          console.log('Trusted policy has no selective preflight; preserving legacy policy enforcement and draft exemptions.')
           NODE
           fi
       - name: Create Project read token
         id: app-token
-        if: ${{ steps.preflight.outputs.needs-project == 'true' }}
+        if: ${{ github.repository == 'deepseek-harness/deepseek-harness' && steps.preflight.outputs.needs-project == 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           client-id: ${{ vars.DSH_ISSUE_APP_CLIENT_ID }}
@@ -51,7 +57,7 @@ jobs:
           permission-organization-projects: read
       # Re-read current state even after an exempt preflight; never replace a failure with an edit skip.
       - name: Validate pull request
-        if: ${{ steps.preflight.outputs.legacy-automated != 'true' }}
+        if: ${{ github.repository == 'deepseek-harness/deepseek-harness' && steps.preflight.outputs.exempt != 'true' && steps.preflight.outputs.legacy-exempt != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PROJECT_TOKEN: ${{ steps.app-token.outputs.token }}

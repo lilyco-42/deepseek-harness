@@ -267,6 +267,20 @@ describe('normalizeSessionLog', () => {
   const header = (over: object) => JSON.stringify({ type: 'session', version: 0, id: 's', createdAt: 123, ...over })
   const event = (over: object) => JSON.stringify({ type: 'turn/start', seq: 1, time: 999, data: { turn: 1 }, ...over })
 
+  it('omits internal prompt request digests from fixture comparisons', () => {
+    const message = event({
+      type: 'user/message',
+      data: {
+        content: [{ type: 'text', text: 'prompt' }],
+        source: { kind: 'user', rpcId: 7, requestDigest: 'a'.repeat(64) },
+      },
+    })
+    const output = normalizeSessionLog(`${header({})}\n${message}\n`, ctx)
+
+    expect(output).toContain('"rpcId":7')
+    expect(output).not.toContain('requestDigest')
+  })
+
   it('keeps unexpected request-header fields observable in comparisons', () => {
     const request = (system: boolean) => event({
       type: 'request/header',

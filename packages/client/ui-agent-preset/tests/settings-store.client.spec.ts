@@ -28,7 +28,7 @@ interface Recorded { ns: string; ops: unknown }
 
 /** A roster Remote answering a fixed set of rows, or refusing. */
 function fakeRoster(
-  presets: { id: string; isDefault: boolean }[],
+  presets: { id: string; isDefault: boolean; userSelectable?: boolean; broken?: string; name?: string; description?: string }[],
   options: {
     failList?: string
     failListCode?: RemoteErrorCode
@@ -60,7 +60,7 @@ function fakeRoster(
 
 /** A context whose roster and settings write outcome the test controls. */
 function fakeApi(
-  presets: { id: string; isDefault: boolean }[],
+  presets: { id: string; isDefault: boolean; userSelectable?: boolean; broken?: string; name?: string; description?: string }[],
   options: {
     writes?: Recorded[]
     failWrite?: string
@@ -113,6 +113,17 @@ describe('the agent-preset roster store', () => {
     // A broken preset cannot compose a session; listing it here would defer
     // that discovery to a failed session start. The management section shows
     // and edits it from its own store instead.
+    expect(controller.store.getSnapshot().options.map(option => option.id)).toEqual(['standard'])
+  })
+
+  it('keeps server-only presets out of user-facing choices', async () => {
+    const controller = derivedController(fakeApi([
+      { id: 'standard', isDefault: true },
+      { id: 'lain42-web', isDefault: false, userSelectable: false },
+    ]))
+
+    await controller.load()
+
     expect(controller.store.getSnapshot().options.map(option => option.id)).toEqual(['standard'])
   })
 
@@ -314,6 +325,17 @@ describe('the new-session chip controller', () => {
     expect(controller.store.getSnapshot().options).toEqual([
       { id: 'standard', name: '标准模式', description: '完整的编码 agent。' },
     ])
+  })
+
+  it('does not offer server-only presets in the new-session menu', async () => {
+    const controller = chip([
+      { id: 'standard', isDefault: true },
+      { id: 'lain42-web', isDefault: false, userSelectable: false },
+    ] as never, undefined)
+
+    await controller.load()
+
+    expect(controller.store.getSnapshot().options.map(option => option.id)).toEqual(['standard'])
   })
 
   it('opens on nothing when the deployment composes no presets', async () => {
