@@ -106,6 +106,8 @@
       if (c.status === "running") {
         c.status = "error"; c.completedAt = Date.now(); c.durationMs = c.completedAt - c.startedAt;
         c.error = "浏览器在请求期间关闭，服务端是否完成及积分结算未知，请检查官方积分流水";
+        c.events = Array.isArray(c.events) ? c.events : [];
+        c.events.push({ type: "interrupted", at: Date.now(), description: "浏览器重载中断了请求状态跟踪，积分结算状态未知" });
         await dbPut("calls", c);
       }
     }
@@ -177,6 +179,13 @@
   $("theme-toggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   $("clear-chat").onclick = () => createSession();
   $("new-session").onclick = () => createSession();
+  document.addEventListener("keydown", event => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      if (!$("login-modal").hidden || inFlight) return;
+      createSession();
+    }
+  });
 
   function openLogin() { $("login-error").textContent = ""; $("login-modal").hidden = false; $("username").focus(); }
   function closeLogin() { $("login-modal").hidden = true; $("password").value = ""; }
@@ -390,19 +399,22 @@
       path: "/ai-api/chat", startedAt, completedAt: null, durationMs: null, httpStatus: null,
       status: "running", clientRequestId: idempotency,
       request: { messages: context, temperature: 0.3, max_tokens: 180, stream: false },
-      response: null, output: "", error: "", usage: null, billing: null, serverResponseId: null
+      response: null, output: "", error: "", usage: null, billing: null, serverResponseId: null,
+      events: [{ type: "request_sent", at: startedAt, description: "已发送请求，服务端将验证积分并进行预扣" }]
     };
     try { await putCall(call); } catch { notice("本地调用日志暂不可用"); }
     activeCallId = requestId;
     try {
       const result = await api("/ai-api/chat", { method: "POST", idempotency, body: { model, ...call.request }, timeout: 120000 });
+      call.events.push({ type: "response_received", at: Date.now(), description: "模型响应已收到（HTTP 200）" });
       const content = result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.content;
       if (typeof content !== "string" || !content.trim()) throw new Error("模型返回了空内容，请检查积分流水");
       const loop = isSevereLoop(content);
       const warning = loop ? " ⚠ 检测到循环回答；请检查积分流水，不要重复发送" : "";
-      const tokenCount = Number(result.usage && result.usage.total_tokens);
-      const charged = Number(result.billing && result.billing.points_charged);
-      const meta = (Number.isFinite(tokenCount) ? fmt(tokenCount) + " Token · " : "") + (Number.isFinite(charged) ? "消耗 " + fmt(charged) + " 积分" : "结算数据不可用") + warning;
+      const tokenCount = result.usage ? numberOrNull(result.usage.total_tokens) : null;
+      const charged = result.billing ? numberOrNull(result.billing.points_charged) : null;
+      const meta = (tokenCount != null ? fmt(tokenCount) + " Token · " : "") + (charged != null ? "消耗 " + fmt(charged) + " 积分" : "结算数据不可用") + warning;
+      call.events.push({ type: "billing_recorded", at: Date.now(), description: charged != null ? "已获取服务器积分结算结果：" + charged + " 积分" : "服务器未返回可确认的积分结算结果" });
       renderAssistantMarkdown(pending.text, content); pending.element.classList.remove("pending");
       const replyBody = pending.element.querySelector(".message-body");
       replyBody.append(node("div", "message-meta", meta));
@@ -420,12 +432,14 @@
       pending.element.classList.remove("pending"); pending.element.classList.add("error");
       pending.text.textContent = "请求失败。请检查调用记录与积分流水；为避免重复扣费，系统不会自动重试。";
       call = { ...call, status: "error", httpStatus: numberOrNull(err.status), error: readableError(err) };
+      call.events.push({ type: "request_failed", at: Date.now(), description: "请求失败，实际是否扣费请核对官方积分流水", httpStatus: numberOrNull(err.status) });
       notice(err.status === 402 ? "积分不足，请前往积分中心充值" : readableError(err));
       await refreshWallet();
     } finally {
       clearInterval(progressTimer);
       $("compose-status").textContent = previousStatus;
       call.completedAt = Date.now(); call.durationMs = call.completedAt - call.startedAt;
+      call.events.push({ type: "client_finished", at: call.completedAt, description: "客户端已结束等待，耗时 " + call.durationMs + " 毫秒" });
       try { await putCall(call); } catch { notice("这次本地调用记录保存失败"); }
       inFlight = false; activeCallId = null; $("send").disabled = false; $("prompt").disabled = false; scrollChat(); $("prompt").focus();
     }
@@ -464,10 +478,14 @@
       [ "积分", call.billing ? fmt(call.billing.points_charged) : "—" ]]
       .forEach(([k, v]) => { const box = node("div"); box.append(node("small", "", k), node("strong", "", v)); stats.append(box); });
     e.append(stats);
-    const line1 = node("div", "timeline", "请求发起：" + timestamp(call.startedAt)), line2 = node("div", "timeline", call.completedAt ? "请求完成：" + timestamp(call.completedAt) : "请求仍在进行或页面已中断");
-    e.append(line1, line2);
+    const events = Array.isArray(call.events) && call.events.length ? call.events
+      : [{ type: "request_sent", at: call.startedAt, description: "请求开始" }, ...(call.completedAt ? [{ type: "client_finished", at: call.completedAt, description: "请求完成" }] : [])];
+    const eventBlock = node("div", "detail-section");
+    eventBlock.append(node("h3", "", "请求事件时间线"));
+    events.forEach(item => eventBlock.append(node("div", "timeline", timestamp(item.at) + " · " + item.description)));
+    e.append(eventBlock);
     const sections = [
-      ["请求信息", { endpoint: call.path, model: call.model, clientRequestId: call.clientRequestId, httpStatus: call.httpStatus, startedAt: call.startedAt, completedAt: call.completedAt, durationMs: call.durationMs, ttft: "未提供真实流式时间，不计入" }],
+      ["请求信息", { endpoint: call.path, model: call.model, clientRequestId: call.clientRequestId, httpStatus: call.httpStatus, startedAt: call.startedAt, completedAt: call.completedAt, durationMs: call.durationMs, ttft: "未提供真实流式时间，不计入", events }],
       ["模型输入", call.request],
       ["模型输出", call.response || { content: call.output, error: call.error }],
       ["用量与结算", { usage: call.usage, billing: call.billing }],
