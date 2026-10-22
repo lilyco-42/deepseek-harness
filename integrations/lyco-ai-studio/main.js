@@ -16,6 +16,31 @@
   const node = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = String(text); return e; };
   const notice = (msg) => { const el = $("toast"); el.textContent = String(msg); el.classList.add("visible"); clearTimeout(notifyTimer); notifyTimer = setTimeout(() => el.classList.remove("visible"), 5200); };
   const readableError = e => String((e && e.message) || e || "未知错误");
+  function renderAssistantMarkdown(element, raw) {
+    const content = String(raw || "");
+    if (!globalThis.marked || !globalThis.DOMPurify) {
+      element.textContent = content;
+      return;
+    }
+    try {
+      const output = globalThis.marked.parse(content, { gfm: true, breaks: true });
+      element.innerHTML = globalThis.DOMPurify.sanitize(output, {
+        USE_PROFILES: { html: true },
+        FORBID_TAGS: ["img", "svg", "math", "iframe", "object", "form", "input", "button", "video", "audio", "style"],
+        ALLOW_DATA_ATTR: false
+      });
+      element.querySelectorAll("a").forEach(link => {
+        link.setAttribute("target", "_blank");
+        link.setAttribute("rel", "noopener noreferrer");
+      });
+    } catch {
+      element.textContent = content;
+    }
+  }
+  const copyText = async value => {
+    try { await navigator.clipboard.writeText(String(value)); notice("已复制回答"); }
+    catch { notice("复制失败，请手动选择文本"); }
+  };
   const numberOrNull = x => typeof x === "number" && Number.isFinite(x) ? x : null;
   const truncate = (s, n) => String(s || "").slice(0, n);
 
@@ -119,7 +144,15 @@
   function selectView(next) {
     view = ["chat", "trace", "points"].includes(next) ? next : "chat";
     document.querySelectorAll(".view").forEach(e => { e.hidden = e.id !== "view-" + view; e.classList.toggle("active", !e.hidden); });
-    document.querySelectorAll("[data-view]").forEach(e => e.classList.toggle("active", e.dataset.view === view));
+    document.querySelectorAll("[data-view]").forEach(e => {
+      const selected = e.dataset.view === view;
+      e.classList.toggle("active", selected);
+      if (e.classList.contains("switch-btn")) e.classList.toggle("selected", selected);
+      if (e.classList.contains("nav-button")) {
+        if (selected) e.setAttribute("aria-current", "page");
+        else e.removeAttribute("aria-current");
+      }
+    });
     $("page-title").textContent = ({ chat: "AI 对话", trace: "调用记录", points: "积分中心" })[view];
     $("sidebar").classList.remove("open"); $("scrim").hidden = true;
     if (view === "trace") renderTraces();
@@ -130,6 +163,18 @@
   $("open-nav").onclick = () => { $("sidebar").classList.add("open"); $("scrim").hidden = false; };
   $("scrim").onclick = () => { $("sidebar").classList.remove("open"); $("scrim").hidden = true; };
   $("top-credits").onclick = () => selectView("points");
+  const THEME_KEY = "lyco_studio_theme_v2";
+  function applyTheme(theme) {
+    const choice = theme === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = choice;
+    $("theme-toggle").textContent = choice === "dark" ? "☼" : "☾";
+    $("theme-toggle").setAttribute("aria-label", choice === "dark" ? "切换至浅色主题" : "切换至深色主题");
+    try { localStorage.setItem(THEME_KEY, choice); } catch {}
+  }
+  let themePreference = "dark";
+  try { themePreference = localStorage.getItem(THEME_KEY) || "dark"; } catch {}
+  applyTheme(themePreference);
+  $("theme-toggle").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   $("clear-chat").onclick = () => createSession();
   $("new-session").onclick = () => createSession();
 
@@ -238,9 +283,17 @@
     const message = node("div", "message " + role);
     const avatar = node("div", "message-avatar", role === "user" ? "我" : "✦");
     const body = node("div", "message-body"), title = node("div", "message-title", role === "user" ? "你" : "LYCO AI");
-    const text = node("div", "message-content", content);
+    const text = node("div", "message-content", role === "user" ? content : "");
+    if (role === "assistant") renderAssistantMarkdown(text, content);
     body.append(title, text);
     if (meta) body.append(node("div", "message-meta", meta));
+    if (role === "assistant" && content && !content.startsWith("正在生成回答")) {
+      const copy = node("button", "message-copy", "⧉ 复制");
+      copy.type = "button";
+      copy.setAttribute("aria-label", "复制这条模型回答");
+      copy.onclick = () => copyText(content);
+      body.append(copy);
+    }
     message.append(avatar, body);
     return { element: message, text };
   }
@@ -318,6 +371,13 @@
     let context;
     try { context = buildContext(before.concat({ role: "user", content: text })); } catch (error) { notice(readableError(error)); return; }
     inFlight = true; $("send").disabled = true; $("prompt").disabled = true; $("prompt").value = "";
+    const previousStatus = $("compose-status").textContent;
+    const generatingSince = Date.now();
+    $("compose-status").textContent = "正在连接推理服务…";
+    const progressTimer = setInterval(() => {
+      const seconds = Math.floor((Date.now() - generatingSince) / 1000);
+      $("compose-status").textContent = "模型生成中 · " + seconds + " 秒";
+    }, 1000);
     if (before.length === 0) currentSession.title = truncate(text, 25);
     currentSession.messages.push({ role: "user", content: text });
     await saveSession(currentSession);
@@ -343,8 +403,13 @@
       const tokenCount = Number(result.usage && result.usage.total_tokens);
       const charged = Number(result.billing && result.billing.points_charged);
       const meta = (Number.isFinite(tokenCount) ? fmt(tokenCount) + " Token · " : "") + (Number.isFinite(charged) ? "消耗 " + fmt(charged) + " 积分" : "结算数据不可用") + warning;
-      pending.text.textContent = content; pending.element.classList.remove("pending");
-      pending.element.querySelector(".message-body").append(node("div", "message-meta", meta));
+      renderAssistantMarkdown(pending.text, content); pending.element.classList.remove("pending");
+      const replyBody = pending.element.querySelector(".message-body");
+      replyBody.append(node("div", "message-meta", meta));
+      const copyButton = node("button", "message-copy", "⧉ 复制");
+      copyButton.type = "button";
+      copyButton.onclick = () => copyText(content);
+      replyBody.append(copyButton);
       currentSession.messages.push({ role: "assistant", content, meta });
       await saveSession(currentSession);
       call = { ...call, status: loop ? "warning" : "success", httpStatus: 200, output: content,
@@ -358,6 +423,8 @@
       notice(err.status === 402 ? "积分不足，请前往积分中心充值" : readableError(err));
       await refreshWallet();
     } finally {
+      clearInterval(progressTimer);
+      $("compose-status").textContent = previousStatus;
       call.completedAt = Date.now(); call.durationMs = call.completedAt - call.startedAt;
       try { await putCall(call); } catch { notice("这次本地调用记录保存失败"); }
       inFlight = false; activeCallId = null; $("send").disabled = false; $("prompt").disabled = false; scrollChat(); $("prompt").focus();
