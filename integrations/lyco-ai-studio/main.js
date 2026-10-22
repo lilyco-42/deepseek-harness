@@ -9,7 +9,7 @@
   const MAX_CONTEXT_CHARS = 2200;
   const nf = new Intl.NumberFormat("zh-CN");
   let db, jwt = sessionStorage.getItem(JWT_KEY) || "", user = null, wallet = null;
-  let currentSession = null, calls = [], sessions = [], view = "chat", inFlight = false, activeCallId = null, pointsPack = 50, order = null, notifyTimer;
+  let currentSession = null, calls = [], sessions = [], view = "chat", inFlight = false, activeCallId = null, selectedTraceId = null, currentOwner = null, pointsPack = 50, order = null, notifyTimer;
   const safeId = () => (globalThis.crypto && typeof crypto.randomUUID === "function") ? crypto.randomUUID() : "lyco-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   const fmt = value => nf.format(Number(value || 0));
   const timestamp = raw => { try { const t = typeof raw === "number" ? new Date(raw * 1000) : new Date(raw); return Number.isNaN(t.getTime()) ? String(raw || "") : t.toLocaleString("zh-CN"); } catch { return String(raw || ""); } };
@@ -57,14 +57,35 @@
       req.onerror = () => reject(req.error);
     });
   }
-  function dbClear(store) {
-    if (!db) return Promise.resolve();
+  function dbDeleteCalls(ids) {
+    if (!db || !ids.length) return Promise.resolve();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(store, "readwrite");
-      tx.objectStore(store).clear();
+      const tx = db.transaction("calls", "readwrite");
+      const object = tx.objectStore("calls");
+      ids.forEach(id => object.delete(id));
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
     });
+  }
+  async function loadPrivateRecords() {
+    if (!db || !currentOwner) {
+      calls = []; sessions = []; currentSession = null; selectedTraceId = null;
+      renderSessions(); renderConversation(); renderTraces();
+      return;
+    }
+    calls = (await dbAll("calls")).filter(c => c.owner === currentOwner)
+      .sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_CALLS);
+    sessions = (await dbAll("sessions")).filter(s => s.owner === currentOwner)
+      .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 80);
+    for (const c of calls) {
+      if (c.status === "running") {
+        c.status = "error"; c.completedAt = Date.now(); c.durationMs = c.completedAt - c.startedAt;
+        c.error = "浏览器在请求期间关闭，服务端是否完成及积分结算未知，请检查官方积分流水";
+        await dbPut("calls", c);
+      }
+    }
+    currentSession = sessions[0] || null; selectedTraceId = null;
+    renderSessions(); renderConversation(); renderTraces();
   }
   async function trimCalls() {
     if (!db || calls.length <= MAX_CALLS) return;
@@ -119,7 +140,9 @@
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeLogin(); });
   function resetAuth() {
     jwt = ""; user = null; wallet = null;
+    currentOwner = null; calls = []; sessions = []; currentSession = null; selectedTraceId = null;
     sessionStorage.removeItem(JWT_KEY);
+    renderSessions(); renderConversation(); renderTraces();
     $("account").textContent = "登录";
     $("top-balance").textContent = "—";
     $("wallet-balance").textContent = "—";
@@ -145,6 +168,13 @@
       const data = await api("/studio/api/points", { timeout: 15000 });
       if (!data.ok || !data.points) throw new Error("无法读取积分信息");
       user = { name: String(data.username || "网站账户") };
+      const scope = user.name.trim().toLocaleLowerCase();
+      if (!scope || scope === "网站账户") throw new Error("缺少有效账号标识，无法隔离本地会话");
+      if (currentOwner !== scope) {
+        if (inFlight) throw new Error("请求尚未结束，暂时不能切换账号");
+        currentOwner = scope;
+        await loadPrivateRecords();
+      }
       wallet = data.points;
       $("account").textContent = truncate(user.name, 16);
       $("wallet-name").textContent = "账户 · " + user.name;
@@ -216,6 +246,7 @@
   }
   async function saveSession(session) {
     session.updatedAt = Date.now();
+    if (!currentOwner || session.owner !== currentOwner) return;
     await dbPut("sessions", session);
     sessions = sessions.filter(s => s.id !== session.id);
     sessions.unshift(session);
@@ -224,8 +255,8 @@
   }
   function createSession() {
     if (inFlight) { notice("请求进行中，请稍后新建对话"); return; }
-    currentSession = { id: safeId(), title: "新对话", createdAt: Date.now(), updatedAt: Date.now(), messages: [] };
-    saveSession(currentSession).catch(() => notice("本地保存失败"));
+    currentSession = { id: safeId(), owner: currentOwner, title: "新对话", createdAt: Date.now(), updatedAt: Date.now(), messages: [] };
+    if (currentOwner) saveSession(currentSession).catch(() => notice("本地保存失败"));
     renderConversation(); selectView("chat"); $("prompt").focus();
   }
   function renderSessions() {
@@ -280,9 +311,9 @@
     const text = $("prompt").value.trim();
     if (!text) return;
     if (!jwt) { openLogin(); notice("请先登录 LYCO 账号"); return; }
-    if (!currentSession) createSession();
     if (!user) await refreshWallet();
-    if (!user) { openLogin(); return; }
+    if (!user || !currentOwner) { openLogin(); return; }
+    if (!currentSession || currentSession.owner !== currentOwner) createSession();
     const before = currentSession.messages.slice();
     let context;
     try { context = buildContext(before.concat({ role: "user", content: text })); } catch (error) { notice(readableError(error)); return; }
@@ -295,7 +326,7 @@
     pending.element.classList.add("pending"); $("conversation").append(pending.element); scrollChat();
     const requestId = safeId(), startedAt = Date.now(), idempotency = safeId(), model = MODEL;
     let call = {
-      id: requestId, sessionId: currentSession.id, model,
+      id: requestId, owner: currentOwner, sessionId: currentSession.id, model,
       path: "/ai-api/chat", startedAt, completedAt: null, durationMs: null, httpStatus: null,
       status: "running", clientRequestId: idempotency,
       request: { messages: context, temperature: 0.55, max_tokens: 180, stream: false },
@@ -344,13 +375,13 @@
     const status = $("trace-status").value;
     const list = calls.filter(c => (status === "all" || c.status === status)
       && (!search || JSON.stringify({ model: c.model, req: c.request, output: c.output, error: c.error }).toLocaleLowerCase().includes(search)));
-    if (!list.length) { rows.append(node("div", "empty", "没有符合条件的调用记录")); return; }
+    if (!list.length) { rows.append(node("div", "empty", currentOwner ? "没有符合条件的调用记录" : "登录后查看当前账号的本地调用记录")); return; }
     list.slice(0, 300).forEach(c => {
-      const el = node("button", "trace-item" + (activeCallId === c.id ? " selected" : ""));
+      const el = node("button", "trace-item" + (selectedTraceId === c.id ? " selected" : ""));
       el.type = "button"; const row = node("div", "row"), content = c.request && c.request.messages || [];
       row.append(node("span", "title", "#" + truncate(c.id, 8)), node("span", "status " + (c.status === "success" ? "success" : c.status === "error" ? "error" : ""), c.status));
       el.append(row, node("p", "", truncate(content.length ? content[content.length - 1].content : "", 160)), node("small", "", timestamp(c.startedAt) + " · " + (c.durationMs != null ? c.durationMs + " ms" : "进行中")));
-      el.onclick = () => { activeCallId = c.id; renderTraces(); renderTraceDetails(c); };
+      el.onclick = () => { selectedTraceId = c.id; renderTraces(); renderTraceDetails(c); };
       rows.append(el);
     });
   }
@@ -377,7 +408,8 @@
     sections.forEach(([title, value]) => { const block = node("div", "detail-section"); block.append(node("h3", "", title), node("pre", "", JSON.stringify(value, null, 2))); e.append(block); });
   }
   $("export-traces").onclick = async () => {
-    const data = { schema: "lyco-harness-client-v1", exportedAt: new Date().toISOString(), note: "Contains user prompts and model outputs. Contains no passwords or JWTs.", calls, sessions };
+    if (!currentOwner) { openLogin(); return; }
+    const data = { schema: "lyco-harness-client-v1", exportedAt: new Date().toISOString(), account: currentOwner, note: "Contains user prompts and model outputs. Contains no passwords or JWTs.", calls, sessions };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a"), url = URL.createObjectURL(blob);
     a.href = url; a.download = "lyco-client-traces-" + new Date().toISOString().slice(0, 10) + ".json";
@@ -385,7 +417,7 @@
   };
   $("clear-traces").onclick = async () => {
     if (!confirm("确定清空此浏览器内保存的调用记录？此操作不可撤销，但不会删除服务器上的积分流水。")) return;
-    try { await dbClear("calls"); calls = []; activeCallId = null; $("trace-detail").replaceChildren(node("div", "detail-intro", "本地调用记录已清空")); renderTraces(); notice("已清空本地记录"); }
+    try { if (!currentOwner) { openLogin(); return; } await dbDeleteCalls(calls.map(c => c.id)); calls = []; selectedTraceId = null; $("trace-detail").replaceChildren(node("div", "detail-intro", "本地调用记录已清空")); renderTraces(); notice("已清空当前账号的本地记录"); }
     catch (err) { notice("清理失败：" + readableError(err)); }
   };
 
@@ -403,21 +435,12 @@
   async function boot() {
     try {
       db = await openDatabase();
-      calls = (await dbAll("calls")).sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_CALLS);
-      sessions = (await dbAll("sessions")).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 80);
-      // A reload while a request is pending does not imply that the server refunded it.
-      for (const c of calls) {
-        if (c.status === "running") {
-          c.status = "error"; c.completedAt = Date.now(); c.durationMs = c.completedAt - c.startedAt;
-          c.error = "浏览器在请求期间关闭，服务端是否完成及积分结算未知，请检查官方积分流水";
-          await dbPut("calls", c);
-        }
-      }
-      renderTraces();
-      currentSession = sessions[0] || null;
+      // Never expose another website account's locally cached conversations.
+      if (jwt) await refreshWallet();
+      else await loadPrivateRecords();
     } catch (error) { notice("本地轨迹不可用：" + readableError(error)); }
     if (!currentSession) createSession(); else { renderSessions(); renderConversation(); }
-    selectView("chat"); modelHealth(); refreshWallet();
+    selectView("chat"); modelHealth(); if (!jwt) renderTraces();
     setInterval(modelHealth, 55000);
   }
   boot();
