@@ -3,59 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0c0e14">
+  <meta name="theme-color" content="#181818">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self';connect-src 'self';img-src 'self' data:;style-src 'self';script-src 'self';object-src 'none';base-uri 'none';form-action 'self'">
-  <title>LYCO AI · Studio</title>
+  <title>LYCO · AI Workspace</title>
   <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./harness-v2.css">
+  <script defer src="./vendor/marked.umd.js"></script>
+  <script defer src="./vendor/purify.min.js"></script>
   <script defer src="./main.js"></script>
 </head>
 <body>
 <div class="layout">
   <aside class="sidebar" id="sidebar">
-    <div class="brand"><span class="logo">✦</span><div><strong>LYCO</strong><span>HARNESS STUDIO</span></div></div>
-    <div class="section-caption">工作空间</div>
+    <div class="sidebar-brandline">
+      <div class="brand"><span class="logo" aria-hidden="true">✦</span><div><strong>LYCO</strong><span>AI WORKSPACE</span></div></div>
+      <span class="preview-pill">BETA</span>
+    </div>
+    <button type="button" class="new-session hero-new" id="new-session"><span aria-hidden="true">＋</span> 新对话 <kbd>⌘ K</kbd></button>
+    <div class="section-caption">WORKSPACE</div>
     <nav class="nav" aria-label="工作空间导航">
-      <button type="button" class="nav-button active" data-view="chat">◉ <span>AI 对话</span></button>
-      <button type="button" class="nav-button" data-view="trace">▤ <span>调用记录</span><span class="nav-counter" id="call-counter">0</span></button>
-      <button type="button" class="nav-button" data-view="points">◇ <span>积分中心</span></button>
+      <button type="button" class="nav-button active" data-view="chat"><span class="nav-icon" aria-hidden="true">◈</span><span>对话</span></button>
+      <button type="button" class="nav-button" data-view="trace"><span class="nav-icon" aria-hidden="true">▤</span><span>调用轨迹</span><span class="nav-counter" id="call-counter">0</span></button>
+      <button type="button" class="nav-button" data-view="points"><span class="nav-icon" aria-hidden="true">◉</span><span>积分中心</span></button>
     </nav>
-    <div class="section-caption spaced">对话会话</div>
-    <button type="button" class="new-session" id="new-session">＋ 新建对话</button>
+    <div class="sidebar-section"><span class="section-caption spaced">最近的对话</span><span class="sidebar-section-icon" aria-hidden="true">···</span></div>
     <div class="sessions" id="sessions" aria-label="本机对话记录"></div>
     <div class="side-bottom">
-      <div class="model-state"><span class="state-dot" id="state-dot"></span><span id="model-status">连接模型中…</span></div>
-      <div class="side-note">Local inference · 浏览器本地记录</div>
-      <a href="/ai-api/chat" class="legacy-link">↩ 旧版 LYCO 对话</a>
+      <div class="model-state"><span class="state-dot" id="state-dot"></span><span id="model-status">连接模型中…</span><span class="model-stamp">A7A</span></div>
+      <div class="side-note">Qwen2.5 · 本地推理 · 私有会话</div>
+      <a href="/ai-api/chat" class="legacy-link">↩ 返回旧版聊天</a>
     </div>
   </aside>
 
   <div class="primary">
     <header class="toolbar">
-      <div class="breadcrumb"><button class="mobile-nav" id="open-nav" type="button" aria-label="打开菜单">☰</button><span>LYCO Studio</span><span class="crumb-divider">/</span><strong id="page-title">AI 对话</strong></div>
+      <div class="breadcrumb"><button class="mobile-nav" id="open-nav" type="button" aria-label="打开侧边栏">☰</button><span class="crumb-app">LYCO AI</span><span class="crumb-divider">›</span><strong id="page-title">对话</strong><span class="header-dot"></span><span class="header-context">Personal workspace</span></div>
       <div class="toolbar-actions">
-        <span class="model-label">✦ <b id="model-title">Qwen2.5 Abliterated</b></span>
-        <button type="button" id="top-credits" class="credits">◇ <span id="top-balance">—</span> 积分</button>
+        <span class="model-label" title="本地私有模型"><span class="pulse-dot"></span><b id="model-title">Qwen2.5 · 1.5B</b></span>
+        <button type="button" id="top-credits" class="credits" title="打开积分中心"><span class="credit-icon">✧</span><span id="top-balance">—</span><span class="credits-label">积分</span></button>
+        <button type="button" id="theme-toggle" class="theme-button" title="切换明暗主题" aria-label="切换主题">☼</button>
         <button type="button" id="account" class="account">登录</button>
       </div>
     </header>
     <div class="page-container">
       <section class="view view-chat active" id="view-chat">
-        <div class="view-heading"><div><div class="eyebrow">PRIVATE INFERENCE</div><h1>AI 对话</h1><p>独立对话 · 真实积分结算 · 完整客户端轨迹</p></div><button type="button" class="ghost-btn" id="clear-chat">新对话 ↗</button></div>
+        <div class="view-heading chat-title-row"><div><div class="eyebrow">PERSONAL WORKSPACE <span class="eyebrow-separator">/</span> LOCAL INFERENCE</div><h1>对话</h1><p>你与本地模型的每一次交流，都有迹可循。</p></div>
+          <div class="heading-actions conversation-tools"><div class="view-switch" role="group" aria-label="对话视图"><button type="button" class="switch-btn selected" data-view="chat">对话</button><button type="button" class="switch-btn" data-view="trace">轨迹</button></div><button type="button" class="ghost-btn" id="clear-chat">＋ 新对话</button></div></div>
         <div class="conversation" id="conversation" role="log" aria-live="polite">
-          <div class="welcome" id="welcome"><span class="large-logo">✦</span><h2>开启一段新的对话</h2><p>基于 Radxa A7A 的本地模型。每次调用会在「调用记录」留下完整的客户端轨迹。</p>
+          <div class="welcome" id="welcome"><div class="hero-signature"><span class="large-logo" aria-hidden="true">✦</span><span class="hero-beta">LOCAL AI</span></div><h2>探索未至之境<span class="hero-caret">.</span></h2><p>由 Radxa A7A 提供本地推理。<span class="hero-nextline">一个问题，开启更多可能。</span></p>
+            <div class="welcome-meta"><span>◌ 标准对话</span><span class="meta-sep"></span><span>▦ 自动保存轨迹</span><span class="meta-sep"></span><span>◇ 按 Token 结算</span></div>
             <div class="suggestions">
-              <button type="button" data-suggest="解释工业物联网的三个核心组件，并给出它们之间的数据流。">工业物联网入门 <small>设备 · 网关 · 平台</small></button>
-              <button type="button" data-suggest="帮我制定一个四周的 Rust 入门学习计划。">Rust 学习计划 <small>学习路径</small></button>
-              <button type="button" data-suggest="把这个任务拆解为可以逐项验证的步骤。">拆解任务 <small>清晰的行动步骤</small></button>
+              <button type="button" data-suggest="解释工业物联网的三个核心组件，并给出它们之间的数据流。"><span class="suggestion-icon">↗</span> 解释工业物联网</button>
+              <button type="button" data-suggest="帮我制定一个四周的 Rust 入门学习计划。"><span class="suggestion-icon">↗</span> 制定 Rust 学习计划</button>
+              <button type="button" data-suggest="把这个任务拆解为可以逐项验证的步骤。"><span class="suggestion-icon">↗</span> 拆解复杂任务</button>
             </div>
           </div>
         </div>
-        <div class="chat-footer"><div class="composer"><textarea id="prompt" rows="2" maxlength="1200" placeholder="给 LYCO 发送消息……（Enter 发送，Shift+Enter 换行）" aria-label="消息输入"></textarea><div class="compose-actions"><div class="compose-model">✦ <span id="composer-model">LYCO Local · Abliterated</span></div><div class="compose-right"><span id="compose-status">1 积分 / 100 Token</span><button id="send" type="button">发送 ↑</button></div></div></div><div class="disclaimer">模型输出可能不准确；检测到异常循环时，应由服务端退款，而不是仅隐藏错误。</div></div>
+        <div class="chat-footer"><div class="composer"><textarea id="prompt" rows="2" maxlength="1200" placeholder="描述你想要探索的内容……" aria-label="消息输入"></textarea><div class="compose-actions"><div class="compose-model"><span class="compose-model-icon">✦</span><span id="composer-model">Qwen2.5 · Abliterated</span><span class="compose-arrow">⌄</span><span class="mode-pill">标准模式</span></div><div class="compose-right"><span id="compose-status">1 积分 / 100 Token</span><button id="send" type="button" aria-label="发送消息"><span class="send-caption">发送</span><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 20v-12l-4.6 4.6-1.4-1.4L12 4l7 7-1.4 1.4L13 8v12h-2z"/></svg></button></div></div></div><div class="disclaimer">Enter 发送 · Shift + Enter 换行 <span class="disclaimer-spacer">·</span> AI 可能生成不准确的内容</div></div>
       </section>
 
       <section class="view view-trace" id="view-trace" hidden>
-        <div class="view-heading"><div><div class="eyebrow">CLIENT TRAJECTORY</div><h1>调用记录</h1><p>仅保存在此浏览器的 IndexedDB 中，不会同步至服务器。</p></div><div class="heading-actions"><button type="button" class="ghost-btn" id="export-traces">导出 JSON ↗</button><button type="button" class="danger-btn" id="clear-traces">清空记录</button></div></div>
+        <div class="view-heading"><div><div class="eyebrow">SESSION EVENT LOG</div><h1>调用轨迹 <span class="title-soft">Trajectory</span></h1><p>请求与响应时间线。历史仅保存在当前浏览器中。</p></div><div class="heading-actions"><div class="view-switch"><button type="button" class="switch-btn" data-view="chat">对话</button><button type="button" class="switch-btn selected" data-view="trace">轨迹</button></div><button type="button" class="ghost-btn" id="export-traces">↓ 导出 JSON</button><button type="button" class="danger-btn" id="clear-traces">清空</button></div></div>
         <div class="trace-metrics">
           <article><small>总调用次数</small><strong id="stat-total">0</strong></article>
           <article><small>成功请求</small><strong id="stat-success">0</strong></article>
@@ -69,7 +78,7 @@
       </section>
 
       <section class="view view-points" id="view-points" hidden>
-        <div class="view-heading"><div><div class="eyebrow">WALLET & USAGE</div><h1>积分中心</h1><p>与 LYCO 网站余额和账本保持一致，交易以服务端记录为准。</p></div><button type="button" class="ghost-btn" id="refresh-points">刷新余额 ⟳</button></div>
+        <div class="view-heading"><div><div class="eyebrow">BILLING & USAGE</div><h1>积分中心 <span class="title-soft">Credits</span></h1><p>账户余额、充值和用量记录，均以官方账本为准。</p></div><button type="button" class="ghost-btn" id="refresh-points">↻ 刷新余额</button></div>
         <div class="wallet-cards"><article class="wallet-hero"><span>当前积分余额</span><strong id="wallet-balance">—</strong><small id="wallet-name">登录后查看</small></article><article><span>最近流水收入</span><strong id="recent-in">—</strong><small>已加载流水范围内</small></article><article><span>最近流水支出</span><strong id="recent-out">—</strong><small>已加载流水范围内</small></article></div>
         <div class="points-grid">
           <section class="panel"><h2>充值积分</h2><p>官方积分订单 · 1 USDT = 10 积分</p><div class="packages" id="packages"><button type="button" data-points="10">10<small>1 USDT</small></button><button type="button" data-points="50" class="selected">50<small>5 USDT</small></button><button type="button" data-points="100">100<small>10 USDT</small></button><button type="button" data-points="300">300<small>30 USDT</small></button></div><button type="button" class="primary-btn" id="create-order">创建 50 积分订单</button><div class="order-summary" id="order-summary" hidden><h3>订单已创建（待支付）</h3><dl><dt>订单号</dt><dd id="order-no">—</dd><dt>网络</dt><dd id="order-network">—</dd><dt>金额</dt><dd id="order-amount">—</dd><dt>收款地址</dt><dd id="order-address">—</dd></dl><p>请按订单显示的网络和精确金额转账，付款前核对地址；确认到账前不增加余额。</p><button type="button" id="copy-order" class="ghost-btn">复制付款信息</button></div></section>
@@ -82,7 +91,7 @@
 </div>
 
 <div class="scrim" id="scrim" hidden></div>
-<div class="modal" id="login-modal" hidden><div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="login-title"><button type="button" class="modal-close" id="dismiss-login" aria-label="关闭">✕</button><div class="logo modal-logo">✦</div><h2 id="login-title">登录 LYCO</h2><p>使用原有网站账号登录，自动关联你的积分和调用记录。</p><form id="login-form"><label for="username">用户名</label><input id="username" type="text" autocomplete="username" required maxlength="64"><label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required><button type="submit" class="primary-btn" id="login-submit">登录</button></form><div id="login-error" class="error-text" role="alert"></div></div></div>
+<div class="modal" id="login-modal" hidden><div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="login-title"><button type="button" class="modal-close" id="dismiss-login" aria-label="关闭">✕</button><div class="logo modal-logo">✦</div><div class="modal-eyebrow">CONTINUE TO LYCO</div><h2 id="login-title">欢迎回来</h2><p>使用你的 LYCO 网站账号，继续对话并查看积分。你的模型 API Key 不会进入浏览器。</p><form id="login-form"><label for="username">用户名</label><input id="username" type="text" autocomplete="username" required maxlength="64"><label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required><button type="submit" class="primary-btn" id="login-submit">登录</button></form><div id="login-error" class="error-text" role="alert"></div></div></div>
 <div class="toast" id="toast" role="status"></div>
 </body>
 </html>
