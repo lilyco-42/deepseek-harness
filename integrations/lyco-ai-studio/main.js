@@ -329,7 +329,7 @@
       id: requestId, owner: currentOwner, sessionId: currentSession.id, model,
       path: "/ai-api/chat", startedAt, completedAt: null, durationMs: null, httpStatus: null,
       status: "running", clientRequestId: idempotency,
-      request: { messages: context, temperature: 0.55, max_tokens: 180, stream: false },
+      request: { messages: context, temperature: 0.3, max_tokens: 180, stream: false },
       response: null, output: "", error: "", usage: null, billing: null, serverResponseId: null
     };
     try { await putCall(call); } catch { notice("本地调用日志暂不可用"); }
