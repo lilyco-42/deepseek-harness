@@ -142,7 +142,7 @@
     jwt = ""; user = null; wallet = null;
     currentOwner = null; calls = []; sessions = []; currentSession = null; selectedTraceId = null;
     sessionStorage.removeItem(JWT_KEY);
-    renderSessions(); renderConversation(); renderTraces();
+    renderSessions(); renderConversation(); renderTraces(); renderLedger();
     $("account").textContent = "登录";
     $("top-balance").textContent = "—";
     $("wallet-balance").textContent = "—";
