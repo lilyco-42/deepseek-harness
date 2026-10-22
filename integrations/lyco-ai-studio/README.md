@@ -31,3 +31,17 @@ At release, verify: protected routes 401 without JWT, login/balance, one isolate
 The existing Python gateway was discovered injecting `/no_think` into **Qwen2.5** user messages and running llama.cpp with default repetition penalty 1.0. Repair these server-side first; a new UI cannot correct a broken decode loop. Existing 1.5B GGUF may still hallucinate after tuning, and 3B Q4_K_M is only a candidate pending A7A quality/memory testing.
 
 Upstream DeepSeek Harness: https://github.com/deepseek-ai/deepseek-harness — MIT, experimental, not audited. This client does not claim upstream certification or its Agent Tool security model.
+
+## V2 redesign and preview
+
+The v2 UI uses `harness-v2.css` as an additive layer on `style.css`, and focuses on a dialogue-centered grey/graphite interface. It keeps the compatible and privileged-free backend routes above. Features: desktop/mobile conversation-first layout, sessions in left rail, client trace timeline, points panel, local request duration, accessible light/dark toggle, safe Markdown rendering and fenced code blocks. The standalone preview route is:
+
+`https://lain42.top/ai-api/harness/v2/`
+
+Deployment is versioned and isolated under `/opt/lyco-ai-gateway/harness-preview/v2/`, with `/ai-api/harness/` retained as previous preview and `/ai-api/chat` as legacy fallback. Pin the reviewed vendor bundles of **Marked 15.0.12** and **DOMPurify 3.2.6** locally under `vendor/`; retain their separate open-source license notices when packaging. CSP only permits first-party JS, CSS, and same-origin API calls. Sanitization forbids active/embedded HTML before insertion. Never render raw Markdown with `innerHTML` except after sanitization.
+
+Client events store request sent, response received, official billing result, and completion/failure, with timestamps and duration. Missing billing fields are displayed as unknown rather than fabricated zero. The client never claims true streamed TTFT. Ctrl/⌘+K begins a new session (unless blocked by an active request).
+
+## GitHub OAuth on the separate New API console
+
+The `api.lain42.top` GitHub login error is a **different** app issue than this preview. On 2026-10-22 the New API container was configured with HTTP_PROXY and HTTPS_PROXY pointing to `http://172.18.0.1:1081`, but sing-box on the host only listened on `127.0.0.1:1081`. GitHub OAuth logs reported `proxyconnect tcp ... connect: connection refused`. The VPS and a direct container probe could reach GitHub without those proxy variables. The cautious fix is to remove those two stale environment variables in `/opt/new-api/docker-compose.prod.yml`, validate Compose, rebuild only `new-api`, and reverify the actual callback exchange. **This login fix is not completed until the remote control node comes back online and the change is applied.** Do not reproduce OAuth codes or secrets in logs/artifacts.
