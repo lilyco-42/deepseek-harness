@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0c0e14">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self';connect-src 'self';img-src 'self' data:;style-src 'self';script-src 'self';object-src 'none';base-uri 'none';form-action 'self'">
+  <title>LYCO AI · Studio</title>
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="./main.js"></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><span class="logo">✦</span><div><strong>LYCO</strong><span>HARNESS STUDIO</span></div></div>
+    <div class="section-caption">工作空间</div>
+    <nav class="nav" aria-label="工作空间导航">
+      <button type="button" class="nav-button active" data-view="chat">◉ <span>AI 对话</span></button>
+      <button type="button" class="nav-button" data-view="trace">▤ <span>调用记录</span><span class="nav-counter" id="call-counter">0</span></button>
+      <button type="button" class="nav-button" data-view="points">◇ <span>积分中心</span></button>
+    </nav>
+    <div class="section-caption spaced">对话会话</div>
+    <button type="button" class="new-session" id="new-session">＋ 新建对话</button>
+    <div class="sessions" id="sessions" aria-label="本机对话记录"></div>
+    <div class="side-bottom">
+      <div class="model-state"><span class="state-dot" id="state-dot"></span><span id="model-status">连接模型中…</span></div>
+      <div class="side-note">Local inference · 浏览器本地记录</div>
+      <a href="/ai-api/chat" class="legacy-link">↩ 旧版 LYCO 对话</a>
+    </div>
+  </aside>
+
+  <div class="primary">
+    <header class="toolbar">
+      <div class="breadcrumb"><button class="mobile-nav" id="open-nav" type="button" aria-label="打开菜单">☰</button><span>LYCO Studio</span><span class="crumb-divider">/</span><strong id="page-title">AI 对话</strong></div>
+      <div class="toolbar-actions">
+        <span class="model-label">✦ <b id="model-title">Qwen2.5 Abliterated</b></span>
+        <button type="button" id="top-credits" class="credits">◇ <span id="top-balance">—</span> 积分</button>
+        <button type="button" id="account" class="account">登录</button>
+      </div>
+    </header>
+    <div class="page-container">
+      <section class="view view-chat active" id="view-chat">
+        <div class="view-heading"><div><div class="eyebrow">PRIVATE INFERENCE</div><h1>AI 对话</h1><p>独立对话 · 真实积分结算 · 完整客户端轨迹</p></div><button type="button" class="ghost-btn" id="clear-chat">新对话 ↗</button></div>
+        <div class="conversation" id="conversation" role="log" aria-live="polite">
+          <div class="welcome" id="welcome"><span class="large-logo">✦</span><h2>开启一段新的对话</h2><p>基于 Radxa A7A 的本地模型。每次调用会在「调用记录」留下完整的客户端轨迹。</p>
+            <div class="suggestions">
+              <button type="button" data-suggest="解释工业物联网的三个核心组件，并给出它们之间的数据流。">工业物联网入门 <small>设备 · 网关 · 平台</small></button>
+              <button type="button" data-suggest="帮我制定一个四周的 Rust 入门学习计划。">Rust 学习计划 <small>学习路径</small></button>
+              <button type="button" data-suggest="把这个任务拆解为可以逐项验证的步骤。">拆解任务 <small>清晰的行动步骤</small></button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-footer"><div class="composer"><textarea id="prompt" rows="2" maxlength="1200" placeholder="给 LYCO 发送消息……（Enter 发送，Shift+Enter 换行）" aria-label="消息输入"></textarea><div class="compose-actions"><div class="compose-model">✦ <span id="composer-model">LYCO Local · Abliterated</span></div><div class="compose-right"><span id="compose-status">1 积分 / 100 Token</span><button id="send" type="button">发送 ↑</button></div></div></div><div class="disclaimer">模型输出可能不准确；检测到异常循环时，应由服务端退款，而不是仅隐藏错误。</div></div>
+      </section>
+
+      <section class="view view-trace" id="view-trace" hidden>
+        <div class="view-heading"><div><div class="eyebrow">CLIENT TRAJECTORY</div><h1>调用记录</h1><p>仅保存在此浏览器的 IndexedDB 中，不会同步至服务器。</p></div><div class="heading-actions"><button type="button" class="ghost-btn" id="export-traces">导出 JSON ↗</button><button type="button" class="danger-btn" id="clear-traces">清空记录</button></div></div>
+        <div class="trace-metrics">
+          <article><small>总调用次数</small><strong id="stat-total">0</strong></article>
+          <article><small>成功请求</small><strong id="stat-success">0</strong></article>
+          <article><small>记录的 Token</small><strong id="stat-tokens">0</strong></article>
+          <article><small>记录的积分消耗</small><strong id="stat-points">0</strong></article>
+        </div>
+        <div class="trace-tools"><input id="trace-search" type="search" placeholder="搜索模型、提问、回答或错误…" aria-label="搜索调用记录"><select id="trace-status" aria-label="调用状态"><option value="all">全部状态</option><option value="success">成功</option><option value="error">失败</option><option value="running">进行中</option></select></div>
+        <div class="trace-grid"><div class="trace-list" id="trace-list"><div class="empty">暂无调用记录</div></div>
+          <div class="trace-detail" id="trace-detail"><div class="detail-intro">选择一条请求以查看时间线、输入输出、Token 用量、积分与错误详情。不会显示登录密钥。</div></div>
+        </div>
+      </section>
+
+      <section class="view view-points" id="view-points" hidden>
+        <div class="view-heading"><div><div class="eyebrow">WALLET & USAGE</div><h1>积分中心</h1><p>与 LYCO 网站余额和账本保持一致，交易以服务端记录为准。</p></div><button type="button" class="ghost-btn" id="refresh-points">刷新余额 ⟳</button></div>
+        <div class="wallet-cards"><article class="wallet-hero"><span>当前积分余额</span><strong id="wallet-balance">—</strong><small id="wallet-name">登录后查看</small></article><article><span>最近流水收入</span><strong id="recent-in">—</strong><small>已加载流水范围内</small></article><article><span>最近流水支出</span><strong id="recent-out">—</strong><small>已加载流水范围内</small></article></div>
+        <div class="points-grid">
+          <section class="panel"><h2>充值积分</h2><p>官方积分订单 · 1 USDT = 10 积分</p><div class="packages" id="packages"><button type="button" data-points="10">10<small>1 USDT</small></button><button type="button" data-points="50" class="selected">50<small>5 USDT</small></button><button type="button" data-points="100">100<small>10 USDT</small></button><button type="button" data-points="300">300<small>30 USDT</small></button></div><button type="button" class="primary-btn" id="create-order">创建 50 积分订单</button><div class="order-summary" id="order-summary" hidden><h3>订单已创建（待支付）</h3><dl><dt>订单号</dt><dd id="order-no">—</dd><dt>网络</dt><dd id="order-network">—</dd><dt>金额</dt><dd id="order-amount">—</dd><dt>收款地址</dt><dd id="order-address">—</dd></dl><p>请按订单显示的网络和精确金额转账，付款前核对地址；确认到账前不增加余额。</p><button type="button" id="copy-order" class="ghost-btn">复制付款信息</button></div></section>
+          <section class="panel"><h2>透明计费</h2><p>1 积分 / 100 Token，服务端按实际请求结算。</p><div class="billing-line"><strong>预扣</strong><span>请求发送前预留积分</span></div><div class="billing-line"><strong>结算</strong><span>按照实际 Token 消耗扣除</span></div><div class="billing-line"><strong>退款</strong><span>异常请求应自动退还预扣积分</span></div><a href="/ai-api/points" class="ghost-link">前往原积分页与开发者 API 管理 ↗</a></section>
+        </div>
+        <div class="ledger-panel"><div class="ledger-header"><h2>积分流水</h2><small>来自网站官方账本</small></div><div class="ledger" id="ledger"><div class="empty">登录后查看官方流水</div></div></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<div class="modal" id="login-modal" hidden><div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="login-title"><button type="button" class="modal-close" id="dismiss-login" aria-label="关闭">✕</button><div class="logo modal-logo">✦</div><h2 id="login-title">登录 LYCO</h2><p>使用原有网站账号登录，自动关联你的积分和调用记录。</p><form id="login-form"><label for="username">用户名</label><input id="username" type="text" autocomplete="username" required maxlength="64"><label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required><button type="submit" class="primary-btn" id="login-submit">登录</button></form><div id="login-error" class="error-text" role="alert"></div></div></div>
+<div class="toast" id="toast" role="status"></div>
+</body>
+</html>
